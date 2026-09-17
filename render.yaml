@@ -1,0 +1,18 @@
+# Render "Blueprint" — lets you deploy this app with New + Blueprint from
+# the Render dashboard once this repo is pushed to GitHub, instead of
+# configuring a web service by hand. See the deployment walkthrough for the
+# full steps (creating the Supabase database, connecting this repo, etc).
+services:
+  - type: web
+    name: mg-service-approval
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
