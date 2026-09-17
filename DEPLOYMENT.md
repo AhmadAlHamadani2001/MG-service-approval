@@ -25,19 +25,21 @@ nothing about this app's data is reachable through Supabase's public API —
 only through this direct database connection). You just need to fetch the
 one secret only you can see:
 
-1. Go to [supabase.com/dashboard](https://supabase.com/dashboard), open
-   that project, and go to **Project Settings → Database → Connection
-   string**.
-2. Switch to the **Session pooler** tab (not "Direct connection" — the
+1. Go to [supabase.com/dashboard](https://supabase.com/dashboard) and open
+   that project.
+2. Click the **Connect** button near the top of the project page (next to
+   the project name — not under Settings). A panel opens with connection
+   options.
+3. In that panel, choose **Session pooler** (not "Direct connection" — the
    direct host is IPv6-only, and most free hosts including Render can't
-   reach it). Copy that connection string — it looks like:
+   reach it). Copy the connection string shown — it looks like:
    ```
    postgresql://postgres.xxxxxxxxxxxx:[YOUR-PASSWORD]@aws-0-xx-xxxx-x.pooler.supabase.com:5432/postgres
    ```
-3. Replace `[YOUR-PASSWORD]` with your database password (set when the
-   project was created — if you don't have it, **Database → Reset database
-   password** on the same settings page generates a new one). Save the
-   full string — it's your `DATABASE_URL` for Step 3.
+4. Replace `[YOUR-PASSWORD]` with your database password (set when the
+   project was created — if you don't have it, go to **Project Settings →
+   Database** and use **Reset database password** to generate a new one).
+   Save the full string — it's your `DATABASE_URL` for Step 3.
 
 ## Step 2 — Push the code to GitHub
 
