@@ -54,8 +54,17 @@ router.post('/change-password', requireAuth, async (req, res, next) => {
 });
 
 // Lets the login screen offer one-click demo accounts without hardcoding
-// password hashes into the frontend.
+// password hashes into the frontend. This is intentionally unauthenticated
+// (the login screen calls it before anyone is signed in) — which is fine
+// for local/demo use, but in production it would hand out every account's
+// email, role, and shared password to anyone who requests it. So in
+// production it returns no accounts at all, and the login screen (which
+// already treats an empty/failed fetch as "no demo buttons to show", see
+// public/app.js boot()) just renders without the one-click demo section.
 router.get('/demo-accounts', (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.json({ accounts: [] });
+  }
   res.json({
     accounts: db.users.map(u => ({ email: u.email, role: u.role, fullName: u.fullName, password: 'password123' })),
   });
