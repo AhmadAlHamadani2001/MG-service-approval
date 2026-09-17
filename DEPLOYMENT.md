@@ -15,30 +15,29 @@ Everything below is the last-mile setup only you can do (creating
 accounts, approving connections) — I can't create accounts on your behalf.
 Steps 1–2 use free tiers throughout.
 
-## Step 1 — Create the database (Supabase)
+## Step 1 — Grab the database connection string (Supabase)
 
-1. Go to [supabase.com](https://supabase.com) and sign in (or create an
-   account) with the account you want to own this app's database —
-   `jmm.warrantyteam@jiadmotors.com`, since your personal account is
-   already at its 2-project free-tier limit.
-2. Click **New Project**. Name it something like `mg-service-approval`,
-   set a database password (save it somewhere — you'll need it in a
-   moment), and pick a region close to your dealership. Wait for it to
-   finish provisioning (a minute or two).
-3. Once it's ready, go to **Project Settings → Database → Connection
-   string**, and switch to the **Session pooler** tab (not "Direct
-   connection" — the direct host is IPv6-only, and most free hosts
-   including Render can't reach it). Copy that connection string — it
-   looks like:
+This part is already done — using the Supabase account you connected
+(`jmm.warrantyteam@jiadmotors.com`), the project and the table this app
+needs are already created and ready (project: **"jmm.warrantyteam@jiadmotors.com's
+Project"**, table `mg_approval_state`, with row-level security enabled so
+nothing about this app's data is reachable through Supabase's public API —
+only through this direct database connection). You just need to fetch the
+one secret only you can see:
+
+1. Go to [supabase.com/dashboard](https://supabase.com/dashboard), open
+   that project, and go to **Project Settings → Database → Connection
+   string**.
+2. Switch to the **Session pooler** tab (not "Direct connection" — the
+   direct host is IPv6-only, and most free hosts including Render can't
+   reach it). Copy that connection string — it looks like:
    ```
    postgresql://postgres.xxxxxxxxxxxx:[YOUR-PASSWORD]@aws-0-xx-xxxx-x.pooler.supabase.com:5432/postgres
    ```
-   Replace `[YOUR-PASSWORD]` with the database password from step 2. Save
-   this full string somewhere — it's your `DATABASE_URL` for step 3.
-
-The app will create its own table in this database automatically the
-first time it starts — there's nothing to set up by hand in Supabase
-beyond creating the project.
+3. Replace `[YOUR-PASSWORD]` with your database password (set when the
+   project was created — if you don't have it, **Database → Reset database
+   password** on the same settings page generates a new one). Save the
+   full string — it's your `DATABASE_URL` for Step 3.
 
 ## Step 2 — Push the code to GitHub
 
