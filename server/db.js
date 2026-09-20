@@ -281,12 +281,16 @@ function buildSeed() {
   //     and still-covered parts.
   //   - 1HGCM82633A004352 and MJEDDAH2B3C4D5E6F are deliberately NOT given
   //     vehicle records, to demonstrate the "VIN not found" path.
+  // warrantyEndDate is the real, sheet-provided overall warranty expiry
+  // (distinct from the per-part special-period coverageEndsAt computed in
+  // warranty.js) — sample values below are warrantyStartDate + 3 years, for
+  // demo purposes only.
   const vehicles = [
-    { id: uuidv4(), vin: 'WMWXP7C05N2012345', ata: '2026-06-01', purchaseDate: '2026-08-20', warrantyStartDate: '2026-08-20', createdBy: afterSalesAdmin.id, createdAt: now, updatedAt: now },
-    { id: uuidv4(), vin: 'SALFA2A2XJH123456', ata: '2025-01-01', purchaseDate: '2025-01-15', warrantyStartDate: '2025-01-15', createdBy: afterSalesAdmin.id, createdAt: now, updatedAt: now },
-    { id: uuidv4(), vin: 'WVGZZZ1TXJK123456', ata: '2024-06-01', purchaseDate: '2026-08-01', warrantyStartDate: '2025-06-02', createdBy: afterSalesAdmin.id, createdAt: now, updatedAt: now },
-    { id: uuidv4(), vin: 'JN1TAAT32A0123456', ata: '2026-07-01', purchaseDate: '2026-07-05', warrantyStartDate: '2026-07-05', createdBy: afterSalesAdmin.id, createdAt: now, updatedAt: now },
-    { id: uuidv4(), vin: 'MJEDDAH1A2B3C4D5E', ata: '2026-05-01', purchaseDate: '2026-06-01', warrantyStartDate: '2026-06-01', createdBy: afterSalesAdmin.id, createdAt: now, updatedAt: now },
+    { id: uuidv4(), vin: 'WMWXP7C05N2012345', ata: '2026-06-01', purchaseDate: '2026-08-20', warrantyStartDate: '2026-08-20', warrantyEndDate: '2029-08-20', createdBy: afterSalesAdmin.id, createdAt: now, updatedAt: now },
+    { id: uuidv4(), vin: 'SALFA2A2XJH123456', ata: '2025-01-01', purchaseDate: '2025-01-15', warrantyStartDate: '2025-01-15', warrantyEndDate: '2028-01-15', createdBy: afterSalesAdmin.id, createdAt: now, updatedAt: now },
+    { id: uuidv4(), vin: 'WVGZZZ1TXJK123456', ata: '2024-06-01', purchaseDate: '2026-08-01', warrantyStartDate: '2025-06-02', warrantyEndDate: '2028-06-02', createdBy: afterSalesAdmin.id, createdAt: now, updatedAt: now },
+    { id: uuidv4(), vin: 'JN1TAAT32A0123456', ata: '2026-07-01', purchaseDate: '2026-07-05', warrantyStartDate: '2026-07-05', warrantyEndDate: '2029-07-05', createdBy: afterSalesAdmin.id, createdAt: now, updatedAt: now },
+    { id: uuidv4(), vin: 'MJEDDAH1A2B3C4D5E', ata: '2026-05-01', purchaseDate: '2026-06-01', warrantyStartDate: '2026-06-01', warrantyEndDate: '2029-06-01', createdBy: afterSalesAdmin.id, createdAt: now, updatedAt: now },
   ];
 
   return {

@@ -19,12 +19,13 @@ router.use(requireAuth);
 // endpoint is paginated + searchable rather than ever returning the whole
 // table, and the admin UI (app.js) only ever asks for one page at a time.
 
-// Vehicle master data (VIN / ATA / purchase date / warranty start date) is
-// uploaded and maintained by the Aftersales Admin, alongside the service
-// catalog, accounts, and branches. The VIN warranty-check lookup itself is
-// open to every internal role — Sales, Sales Manager, Finance, Aftersales
-// Team, and Aftersales Admin all need to be able to tell a customer whether
-// a repair falls inside the special-period warranty.
+// Vehicle master data (VIN / ATA / purchase date / warranty start + end
+// date) is uploaded and maintained by the Aftersales Admin, alongside the
+// service catalog, accounts, and branches. The VIN warranty-check lookup
+// itself is open to every internal role that's allowed to sign in at all —
+// Sales, Sales Manager, Finance, Aftersales Team, Aftersales Admin, and the
+// warranty-lookup-only Warranty Checker role all need to be able to tell a
+// customer whether a repair falls inside the special-period warranty.
 
 function publicVehicle(v) {
   return {
@@ -33,19 +34,26 @@ function publicVehicle(v) {
     ata: v.ata,
     purchaseDate: v.purchaseDate,
     warrantyStartDate: v.warrantyStartDate,
+    // The dealer's own on-file end date, when their sheet has one — separate
+    // from (and not a substitute for) the per-part computed coverage-end
+    // dates in the warranty-check result, which each part's own months-long
+    // window still determines.
+    warrantyEndDate: v.warrantyEndDate || null,
     createdAt: v.createdAt,
     updatedAt: v.updatedAt,
   };
 }
 
-// Parses+validates the three date fields shared by create/update. Returns
-// { ataDate, purchaseDate, warrantyStartDate } (Date|null for the first two,
-// formatted "YYYY-MM-DD" string|null for warrantyStartDate) or throws.
+// Parses+validates the date fields shared by create/update. Returns
+// { ataDate, purchaseDate, warrantyStartDate, warrantyEndDate } (Date|null
+// for the first two, formatted "YYYY-MM-DD" string|null for the other two)
+// or throws.
 function parseVehicleDates(body, { partial = false } = {}) {
   const errors = [];
   let ataDate = null;
   let purchaseDate = null;
   let warrantyStartDate = null;
+  let warrantyEndDate = null;
 
   if (!partial || body.ata !== undefined) {
     ataDate = parseDateOnly(body.ata);
@@ -60,8 +68,13 @@ function parseVehicleDates(body, { partial = false } = {}) {
     if (!wsd) errors.push('Warranty start date, if provided, must be a valid date (YYYY-MM-DD).');
     else warrantyStartDate = fmt(wsd);
   }
+  if (body.warrantyEndDate !== undefined && body.warrantyEndDate !== null && String(body.warrantyEndDate).trim() !== '') {
+    const wed = parseDateOnly(body.warrantyEndDate);
+    if (!wed) errors.push('Warranty end date, if provided, must be a valid date (YYYY-MM-DD).');
+    else warrantyEndDate = fmt(wed);
+  }
   if (errors.length) throw new ApiError(400, errors.join(' '), 'INVALID_VEHICLE_DATA');
-  return { ataDate, purchaseDate, warrantyStartDate };
+  return { ataDate, purchaseDate, warrantyStartDate, warrantyEndDate };
 }
 
 // Paginated + searchable — at real-export scale (hundreds of thousands of
@@ -92,7 +105,7 @@ router.post('/', requireRole('AFTER_SALES_ADMIN'), async (req, res, next) => {
     if (await vehiclesStore.existsByVin(vin)) {
       throw new ApiError(409, `A vehicle with VIN "${vin}" already exists.`, 'VIN_IN_USE');
     }
-    const { ataDate, purchaseDate, warrantyStartDate } = parseVehicleDates(req.body);
+    const { ataDate, purchaseDate, warrantyStartDate, warrantyEndDate } = parseVehicleDates(req.body);
 
     const now = new Date().toISOString();
     const vehicle = {
@@ -106,6 +119,9 @@ router.post('/', requireRole('AFTER_SALES_ADMIN'), async (req, res, next) => {
       // authoritative start date live from ATA + whatever purchase date the
       // person checking coverage enters.
       warrantyStartDate: warrantyStartDate || fmt(computeWarrantyStart(ataDate, purchaseDate).date),
+      // Unlike warrantyStartDate, there's no fallback derivation for this one
+      // — it's optional, on-file-only data straight from the dealer's sheet.
+      warrantyEndDate: warrantyEndDate || null,
       createdBy: req.user.id,
       createdAt: now,
       updatedAt: now,
@@ -137,8 +153,10 @@ router.post('/bulk-import', requireRole('AFTER_SALES_ADMIN'), async (req, res, n
       const purchaseDate = parseDateOnly(raw.purchaseDate);
       const warrantyStartRaw = raw.warrantyStartDate ? String(raw.warrantyStartDate).trim() : '';
       const warrantyStartDate = warrantyStartRaw ? parseDateOnly(warrantyStartRaw) : null;
+      const warrantyEndRaw = raw.warrantyEndDate ? String(raw.warrantyEndDate).trim() : '';
+      const warrantyEndDate = warrantyEndRaw ? parseDateOnly(warrantyEndRaw) : null;
 
-      if (!vin || !ataDate || !purchaseDate || (warrantyStartRaw && !warrantyStartDate)) {
+      if (!vin || !ataDate || !purchaseDate || (warrantyStartRaw && !warrantyStartDate) || (warrantyEndRaw && !warrantyEndDate)) {
         skipped.push({ row: rowNum, vin: vin || null, reason: 'Missing or invalid fields (vin, ata, and purchaseDate are all required and must be valid dates).' });
         return;
       }
@@ -152,6 +170,7 @@ router.post('/bulk-import', requireRole('AFTER_SALES_ADMIN'), async (req, res, n
         ata: fmt(ataDate),
         purchaseDate: fmt(purchaseDate),
         warrantyStartDate: warrantyStartDate ? fmt(warrantyStartDate) : fmt(computeWarrantyStart(ataDate, purchaseDate).date),
+        warrantyEndDate: warrantyEndDate ? fmt(warrantyEndDate) : null,
         createdBy: req.user.id,
         createdAt: now,
         updatedAt: now,
@@ -205,6 +224,7 @@ const VIN_HEADER_CANDIDATES = ['vehicle vin', 'vin', 'system vin'];
 const ATA_HEADER_CANDIDATES = ['ata'];
 const PURCHASE_HEADER_CANDIDATES = ['purchase date', 'purchasedate'];
 const WARRANTY_START_HEADER_CANDIDATES = ['warranty start date', 'warrantystartdate'];
+const WARRANTY_END_HEADER_CANDIDATES = ['warranty end date', 'warrantyenddate'];
 
 function findHeaderColumn(headerMap, candidates) {
   for (const c of candidates) {
@@ -239,7 +259,7 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
     const isCsv = filename.endsWith('.csv') || req.file.mimetype === 'text/csv';
 
     let headerMap = null;
-    let vinCol = null, ataCol = null, purchaseCol = null, warrantyCol = null;
+    let vinCol = null, ataCol = null, purchaseCol = null, warrantyCol = null, warrantyEndCol = null;
     let created = 0;
     let skippedCount = 0;
     let totalDataRows = 0;
@@ -275,6 +295,7 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
         ataCol = findHeaderColumn(headerMap, ATA_HEADER_CANDIDATES);
         purchaseCol = findHeaderColumn(headerMap, PURCHASE_HEADER_CANDIDATES);
         warrantyCol = findHeaderColumn(headerMap, WARRANTY_START_HEADER_CANDIDATES);
+        warrantyEndCol = findHeaderColumn(headerMap, WARRANTY_END_HEADER_CANDIDATES);
         return;
       }
       if (!vinCol || !ataCol || !purchaseCol) return; // malformed header — reported once after the loop
@@ -284,6 +305,7 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
       const ataDate = parseFlexibleDate(rowValues[ataCol]);
       const purchaseDate = parseFlexibleDate(rowValues[purchaseCol]);
       const warrantyStartDate = warrantyCol ? parseFlexibleDate(rowValues[warrantyCol]) : null;
+      const warrantyEndDate = warrantyEndCol ? parseFlexibleDate(rowValues[warrantyEndCol]) : null;
 
       if (!vin || !ataDate || !purchaseDate) {
         skippedCount += 1;
@@ -306,6 +328,7 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
         ata: fmt(ataDate),
         purchaseDate: fmt(purchaseDate),
         warrantyStartDate: warrantyStartDate ? fmt(warrantyStartDate) : fmt(computeWarrantyStart(ataDate, purchaseDate).date),
+        warrantyEndDate: warrantyEndDate ? fmt(warrantyEndDate) : null,
         createdBy: req.user.id,
         createdAt: now,
         updatedAt: now,
@@ -403,10 +426,11 @@ router.patch('/:id', requireRole('AFTER_SALES_ADMIN'), async (req, res, next) =>
       patch.vin = vin;
     }
 
-    const { ataDate, purchaseDate, warrantyStartDate } = parseVehicleDates(req.body, { partial: true });
+    const { ataDate, purchaseDate, warrantyStartDate, warrantyEndDate } = parseVehicleDates(req.body, { partial: true });
     if (ataDate) patch.ata = fmt(ataDate);
     if (purchaseDate) patch.purchaseDate = fmt(purchaseDate);
     if (req.body?.warrantyStartDate !== undefined) patch.warrantyStartDate = warrantyStartDate;
+    if (req.body?.warrantyEndDate !== undefined) patch.warrantyEndDate = warrantyEndDate;
     patch.updatedAt = new Date().toISOString();
 
     const updated = await vehiclesStore.update(vehicle.id, patch);
