@@ -10,12 +10,18 @@ router.use(requireAuth);
 // service catalog and the branch list.
 router.use(requireRole('AFTER_SALES_ADMIN'));
 
-const ALL_ROLES = ['SALES', 'SALES_MANAGER', 'FINANCE', 'AFTER_SALES_ADMIN', 'AFTERSALES_TEAM'];
+// WARRANTY_CHECK is a restricted account type: it can sign in and use the
+// VIN warranty-check page (single + bulk) only — no service requests, no
+// approvals, no admin screens. See routes/requests.js and routes/users.js's
+// own admin-only gate above (already excludes it), and public/app.js's
+// role-based render() for the frontend side of the restriction.
+const ALL_ROLES = ['SALES', 'SALES_MANAGER', 'FINANCE', 'AFTER_SALES_ADMIN', 'AFTERSALES_TEAM', 'WARRANTY_CHECK'];
 // Only Sales Representatives and Aftersales Team members belong to one
-// specific branch — Sales Manager, Finance, and Aftersales Admin are central
-// roles that operate across every branch.
+// specific branch — Sales Manager, Finance, Aftersales Admin, and Warranty
+// Checker are central roles that operate across every branch (or, for
+// Warranty Checker, no branch at all since it never sees branch-scoped data).
 const BRANCH_ROLES = ['SALES', 'AFTERSALES_TEAM'];
-const CODE_PREFIX = { SALES: 'SLS', SALES_MANAGER: 'SLM', FINANCE: 'FIN', AFTER_SALES_ADMIN: 'ASA', AFTERSALES_TEAM: 'AST' };
+const CODE_PREFIX = { SALES: 'SLS', SALES_MANAGER: 'SLM', FINANCE: 'FIN', AFTER_SALES_ADMIN: 'ASA', AFTERSALES_TEAM: 'AST', WARRANTY_CHECK: 'WTC' };
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function publicUser(u) {

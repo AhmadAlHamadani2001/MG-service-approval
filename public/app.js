@@ -172,6 +172,13 @@ async function loadCommon() {
     state.branches = branches.branches;
     state.users = users.users;
     state.requests = [];
+  } else if (role === 'WARRANTY_CHECK') {
+    // This role only ever sees the VIN warranty-check screen (render()
+    // forces it), which doesn't use the service catalog or request list —
+    // and /api/requests is blocked for this role server-side anyway
+    // (routes/requests.js), so skip both fetches entirely.
+    state.services = [];
+    state.requests = [];
   } else {
     const [svc, reqs] = await Promise.all([api('/api/services'), api('/api/requests')]);
     state.services = svc.services;
@@ -275,6 +282,9 @@ function logout() {
   clearSelection();
   resetDashboardUiState();
   localStorage.removeItem('mg_token');
+  // Otherwise a fresh sign-in could inherit a stale pixel position from the
+  // previous session and animate an unwanted slide on its very first render.
+  Object.keys(tabIndicatorRects).forEach(k => delete tabIndicatorRects[k]);
   render();
 }
 
@@ -296,6 +306,10 @@ function initials(name) {
 
 function shellHtml(content) {
   const role = state.user.role;
+  // WARRANTY_CHECK accounts are always on the VIN-check screen (see render()),
+  // so the toggle button that would take them "back" to a workspace they
+  // don't have is just noise — hide it for that role only.
+  const showVinToggle = role !== 'WARRANTY_CHECK';
   return `
     <header class="sticky top-0 z-20 bg-surface/85 backdrop-blur-xl border-b border-black/[0.06] shadow-[0_1px_10px_rgba(20,21,26,0.04)]">
       <div class="max-w-7xl mx-auto px-g4 sm:px-g5 py-g3 flex items-center justify-between gap-g3">
@@ -314,10 +328,12 @@ function shellHtml(content) {
             <span class="avatar-circle">${esc(initials(state.user.fullName))}</span>
             <span class="text-[12.5px] leading-tight" style="color:var(--ink)">${esc(state.user.fullName)}<br><span class="text-[10.5px] text-soft">${t('role.' + role)}</span></span>
           </div>
+          ${showVinToggle ? `
           <button data-action="toggle-vin-check" class="flex items-center gap-1.5 text-[12.5px] font-semibold rounded-full px-3.5 py-2 transition-colors whitespace-nowrap ${state.vinCheckOpen ? 'bg-mgred text-white' : 'bg-surface-container hover:bg-surface-container-high'}" style="${state.vinCheckOpen ? '' : 'color:var(--ink)'}">
             <span class="material-symbols-outlined text-[16px]">directions_car</span>
             <span class="hidden sm:inline">${t('vin.button')}</span>
           </button>
+          ` : ''}
           <button data-action="open-change-password" class="flex items-center gap-1.5 text-[12.5px] font-semibold bg-surface-container rounded-full px-3.5 py-2 hover:bg-surface-container-high transition-colors whitespace-nowrap" style="color:var(--ink)">
             <span class="material-symbols-outlined text-[16px]">key</span>
             <span class="hidden sm:inline">${t('account.change_password')}</span>
@@ -546,7 +562,7 @@ function caseSectionsHtml(list, { needsActionFilter, needsActionLabel, activeTab
   const effective = tabs.find(tb => tb.key === activeTab) ? activeTab : (needsAction.length ? 'needs' : inProgress.length ? 'progress' : 'history');
 
   const tabBar = `
-    <div class="tab-pill-wrap mb-g3">
+    <div class="tab-pill-wrap mb-g3" data-tabgroup="${esc(tabChangeAction)}">
       ${tabs.map(tb => `<button type="button" class="tab-btn ${effective === tb.key ? 'active' : ''}" data-action="${tabChangeAction}" data-subtab="${tb.key}">${esc(tb.label)} (${tb.items.length})</button>`).join('')}
     </div>`;
 
@@ -586,7 +602,7 @@ function renderSales() {
   }
 
   const tabsBar = `
-    <div class="tab-pill-wrap mb-g4">
+    <div class="tab-pill-wrap mb-g4" data-tabgroup="sales-tabs">
       <button class="tab-btn ${state.salesTab !== 'my' ? 'active' : ''}" data-action="sales-tab" data-tab="new">${t('sales.tab_new')}</button>
       <button class="tab-btn ${state.salesTab === 'my' ? 'active' : ''}" data-action="sales-tab" data-tab="my">${t('sales.tab_my', { n: branchRequests.length })}</button>
     </div>
@@ -817,6 +833,55 @@ function animateCounts() {
   });
 }
 
+// Sliding pill indicator for .tab-pill-wrap groups (nav sub-tabs). Since
+// render() does a wholesale innerHTML replace on every state change, the DOM
+// node for the indicator is recreated fresh each time — there's no element
+// that persists across renders for the browser to transition on its own. So
+// this keys each tab group's last known pixel position (by its
+// data-tabgroup attribute) in tabIndicatorRects, and applies the classic
+// FLIP technique by hand: place the new indicator at its First (old)
+// position with transitions off, force a reflow, then switch to the Last
+// (new) position with a transition on — which the browser then animates as
+// a slide from the old pill to the new one.
+const tabIndicatorRects = {};
+const TAB_INDICATOR_TRANSITION = 'left .26s cubic-bezier(.4,0,.2,1), width .26s cubic-bezier(.4,0,.2,1)';
+
+function syncTabIndicators() {
+  qa('.tab-pill-wrap[data-tabgroup]').forEach(wrap => {
+    const key = wrap.dataset.tabgroup;
+    const active = wrap.querySelector('.tab-btn.active');
+    if (!active) { delete tabIndicatorRects[key]; return; }
+
+    let indicator = wrap.querySelector('.tab-pill-indicator');
+    if (!indicator) {
+      indicator = document.createElement('div');
+      indicator.className = 'tab-pill-indicator';
+      wrap.insertBefore(indicator, wrap.firstChild);
+    }
+
+    const wrapRect = wrap.getBoundingClientRect();
+    const activeRect = active.getBoundingClientRect();
+    const finalLeft = activeRect.left - wrapRect.left;
+    const finalWidth = activeRect.width;
+    const prev = tabIndicatorRects[key];
+
+    if (prev && (Math.abs(prev.left - finalLeft) > 0.5 || Math.abs(prev.width - finalWidth) > 0.5)) {
+      indicator.style.transition = 'none';
+      indicator.style.left = `${prev.left}px`;
+      indicator.style.width = `${prev.width}px`;
+      // Force a reflow so the "First" position above actually takes effect
+      // before we switch to the animated "Last" position below.
+      void indicator.offsetWidth;
+      indicator.style.transition = TAB_INDICATOR_TRANSITION;
+    } else if (!prev) {
+      indicator.style.transition = 'none';
+    }
+    indicator.style.left = `${finalLeft}px`;
+    indicator.style.width = `${finalWidth}px`;
+    tabIndicatorRects[key] = { left: finalLeft, width: finalWidth };
+  });
+}
+
 function renderFinance() {
   const pending = state.requests.filter(r => r.status === 'PENDING_FINANCE_APPROVAL');
   const estimation = state.requests.filter(r => r.status === 'UNDER_AFTER_SALES_ESTIMATION');
@@ -930,7 +995,7 @@ function renderAftersalesTeam() {
 
   return `
     ${walkinPanel}
-    <div class="tab-pill-wrap mb-g4 mt-g5">
+    <div class="tab-pill-wrap mb-g4 mt-g5" data-tabgroup="at-tabs">
       <button class="tab-btn ${state.atTab === 'estimation' ? 'active' : ''}" data-action="at-tab" data-tab="estimation">${t('at.tab_estimation')} · ${state.requests.filter(r => r.status === 'UNDER_AFTER_SALES_ESTIMATION').length}</button>
       <button class="tab-btn ${state.atTab === 'execution' ? 'active' : ''}" data-action="at-tab" data-tab="execution">${t('at.tab_execution')} · ${state.requests.filter(r => r.status === 'APPROVED_IN_AFTER_SALES').length}</button>
       <button class="tab-btn ${state.atTab === 'active' ? 'active' : ''}" data-action="at-tab" data-tab="active">${t('at.tab_active')} · ${myEstimates.length}</button>
@@ -1253,7 +1318,7 @@ function renderAdminCatalog() {
 // as peer pill tabs, the same tab language used everywhere else in the app.
 function renderAdmin() {
   const tabBar = `
-    <div class="tab-pill-wrap mb-g4">
+    <div class="tab-pill-wrap mb-g4" data-tabgroup="admin-tabs">
       <button class="tab-btn ${state.adminTab === 'catalog' ? 'active' : ''}" data-action="admin-tab" data-tab="catalog">${t('admin.tab_catalog')}</button>
       <button class="tab-btn ${state.adminTab === 'accounts' ? 'active' : ''}" data-action="admin-tab" data-tab="accounts">${t('admin.tab_accounts')} · ${state.users.length}</button>
       <button class="tab-btn ${state.adminTab === 'branches' ? 'active' : ''}" data-action="admin-tab" data-tab="branches">${t('admin.tab_branches')} · ${state.branches.length}</button>
@@ -1357,10 +1422,10 @@ function renderAdminBranches() {
 }
 
 function downloadVehicleTemplate() {
-  const header = 'vin,ata,purchaseDate,warrantyStartDate';
+  const header = 'vin,ata,purchaseDate,warrantyStartDate,warrantyEndDate';
   const example = [
-    'WMWXP7C05N2099999,2026-01-01,2026-02-01,',
-    'SALFA2A2X9H099999,2025-05-01,2025-05-10,2025-05-10',
+    'WMWXP7C05N2099999,2026-01-01,2026-02-01,,',
+    'SALFA2A2X9H099999,2025-05-01,2025-05-10,2025-05-10,2028-05-10',
   ];
   const csv = [header, ...example].join('\r\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -1426,12 +1491,13 @@ function renderAdminVehicles() {
     if (state.editingVehicleId === v.id) {
       return `
         <tr class="border-b border-black/8">
-          <td colspan="5" class="py-3">
+          <td colspan="6" class="py-3">
             <div class="flex flex-wrap gap-2 items-end">
               <div class="w-44"><label class="block text-[11px] text-ink/50 mb-1">${t('common.vin')}</label><input type="text" id="edit-vehicle-vin" dir="ltr" value="${esc(v.vin)}" class="field-input-light"></div>
               <div class="w-40"><label class="block text-[11px] text-ink/50 mb-1">${t('admin.ata')}</label><input type="date" id="edit-vehicle-ata" dir="ltr" value="${esc(v.ata)}" class="field-input-light"></div>
               <div class="w-40"><label class="block text-[11px] text-ink/50 mb-1">${t('admin.purchase_date')}</label><input type="date" id="edit-vehicle-purchase" dir="ltr" value="${esc(v.purchaseDate)}" class="field-input-light"></div>
               <div class="w-40"><label class="block text-[11px] text-ink/50 mb-1">${t('admin.warranty_start_date')}</label><input type="date" id="edit-vehicle-warranty" dir="ltr" value="${esc(v.warrantyStartDate || '')}" class="field-input-light"></div>
+              <div class="w-40"><label class="block text-[11px] text-ink/50 mb-1">${t('admin.warranty_end_date')}</label><input type="date" id="edit-vehicle-warranty-end" dir="ltr" value="${esc(v.warrantyEndDate || '')}" class="field-input-light"></div>
               <button class="btn btn-primary btn-sm" data-action="save-vehicle" data-id="${v.id}">${t('common.save')}</button>
               <button class="btn btn-ghost-light btn-sm" data-action="cancel-edit-vehicle">${t('common.cancel')}</button>
             </div>
@@ -1444,6 +1510,7 @@ function renderAdminVehicles() {
         <td class="py-2.5 pe-3 tabular-nums">${esc(v.ata)}</td>
         <td class="py-2.5 pe-3 tabular-nums">${esc(v.purchaseDate)}</td>
         <td class="py-2.5 pe-3 tabular-nums text-ink/60">${esc(v.warrantyStartDate || '—')}</td>
+        <td class="py-2.5 pe-3 tabular-nums text-ink/60">${esc(v.warrantyEndDate || '—')}</td>
         <td class="py-2.5 whitespace-nowrap">
           <button class="text-[11.5px] border border-black/12 rounded-lg px-2.5 py-1 hover:border-mgred hover:text-mgred transition-colors" data-action="edit-vehicle" data-id="${v.id}">${t('admin.edit')}</button>
           <button class="text-[11.5px] border border-black/12 rounded-lg px-2.5 py-1 hover:border-rose-600 hover:text-rose-600 transition-colors ms-1" data-action="delete-vehicle" data-id="${v.id}" data-vin="${esc(v.vin)}">${t('admin.delete')}</button>
@@ -1458,6 +1525,7 @@ function renderAdminVehicles() {
         <div class="w-40"><label class="block text-[11px] text-ink/50 mb-1">${t('admin.ata')}</label><input type="date" id="new-vehicle-ata" dir="ltr" class="field-input-light"></div>
         <div class="w-40"><label class="block text-[11px] text-ink/50 mb-1">${t('admin.purchase_date')}</label><input type="date" id="new-vehicle-purchase" dir="ltr" class="field-input-light"></div>
         <div class="w-40"><label class="block text-[11px] text-ink/50 mb-1">${t('admin.warranty_start_date')}</label><input type="date" id="new-vehicle-warranty" dir="ltr" class="field-input-light"></div>
+        <div class="w-40"><label class="block text-[11px] text-ink/50 mb-1">${t('admin.warranty_end_date')}</label><input type="date" id="new-vehicle-warranty-end" dir="ltr" class="field-input-light"></div>
         <button class="btn btn-primary btn-sm" data-action="create-vehicle">${t('admin.add_vehicle')}</button>
         <button class="btn btn-ghost-light btn-sm" data-action="cancel-new-vehicle">${t('common.cancel')}</button>
       </div>
@@ -1514,8 +1582,8 @@ function renderAdminVehicles() {
       </div>
       ${searchAndPaging}
       <div class="scrollbox"><table>
-        <thead><tr class="border-b border-black/10 text-[11px] uppercase tracking-wide text-ink/50"><th class="py-2 pe-3 text-start">${t('common.vin')}</th><th class="py-2 pe-3 text-start">${t('admin.ata')}</th><th class="py-2 pe-3 text-start">${t('admin.purchase_date')}</th><th class="py-2 pe-3 text-start">${t('admin.warranty_start_date')}</th><th></th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="5" class="py-6 text-center text-ink/40">${t('admin.vehicles_empty')}</td></tr>`}</tbody>
+        <thead><tr class="border-b border-black/10 text-[11px] uppercase tracking-wide text-ink/50"><th class="py-2 pe-3 text-start">${t('common.vin')}</th><th class="py-2 pe-3 text-start">${t('admin.ata')}</th><th class="py-2 pe-3 text-start">${t('admin.purchase_date')}</th><th class="py-2 pe-3 text-start">${t('admin.warranty_start_date')}</th><th class="py-2 pe-3 text-start">${t('admin.warranty_end_date')}</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="6" class="py-6 text-center text-ink/40">${t('admin.vehicles_empty')}</td></tr>`}</tbody>
       </table></div>
     </div>
   `;
@@ -1756,6 +1824,20 @@ function renderVinCheckResult(r) {
     </tr>`;
   }).join('');
 
+  // The overall warranty end date is a real value from the vehicle's own
+  // record (the sheet it was imported/entered from), separate from the
+  // per-part special-period coverageEndsAt dates in the table below. When
+  // present we surface it here, plus an auto-filled comment summarizing the
+  // entered purchase date alongside it — the "show it in the comment box"
+  // half of the request, distinct from the "add it as a real column" half
+  // (which lives in the admin vehicle table/edit form).
+  const warrantyEndRow = r.vehicle.warrantyEndDate ? `
+          <div class="text-[12px] text-ink/50 mt-0.5">${t('vin.warranty_end_label')}: <strong>${esc(r.vehicle.warrantyEndDate)}</strong></div>` : '';
+  const commentBoxNote = [
+    t('vin.comment_purchase_line', { date: r.enteredPurchaseDate }),
+    r.vehicle.warrantyEndDate ? t('vin.comment_warranty_end_line', { date: r.vehicle.warrantyEndDate }) : t('vin.comment_warranty_end_missing'),
+  ].join('\n');
+
   return `
     ${mismatch}
     <div class="card-light rounded-2xl p-g5">
@@ -1763,6 +1845,7 @@ function renderVinCheckResult(r) {
         <div>
           <div class="font-display font-semibold text-[15px]">${t('vin.result_title')}</div>
           <div class="text-[12px] text-ink/50 mt-0.5">${t('vin.warranty_start_label')}: <strong>${esc(r.warrantyStartDate)}</strong></div>
+          ${warrantyEndRow}
           ${autoNote}
         </div>
         <button class="btn btn-primary btn-sm" data-action="print-vin-disclosure">${t('vin.print_disclosure')}</button>
@@ -1778,6 +1861,10 @@ function renderVinCheckResult(r) {
         <tbody>${rows}</tbody>
       </table></div>
       <div class="text-[11px] text-ink/40 mt-g3">${t('vin.km_general_note')}</div>
+      <div class="mt-g4">
+        <label class="block text-[11px] font-semibold uppercase tracking-wide text-ink/50 mb-1.5">${t('vin.comment_box_label')}</label>
+        <textarea id="vin-comment-box" rows="2" class="field-input" readonly>${esc(commentBoxNote)}</textarea>
+      </div>
     </div>
   `;
 }
@@ -1961,7 +2048,9 @@ function render() {
     return;
   }
   const role = state.user.role;
-  const content = state.vinCheckOpen ? renderVinCheck()
+  // WARRANTY_CHECK accounts have no workspace of their own — they can only
+  // ever see the VIN warranty-check screen, regardless of vinCheckOpen.
+  const content = (role === 'WARRANTY_CHECK' || state.vinCheckOpen) ? renderVinCheck()
     : role === 'SALES' ? renderSales()
     : role === 'SALES_MANAGER' ? renderSalesManager()
     : role === 'FINANCE' ? renderFinance()
@@ -1970,6 +2059,7 @@ function render() {
   app.innerHTML = shellHtml(content) + (state.changePasswordOpen ? changePasswordModalHtml() : '');
   wireTotals();
   animateCounts();
+  syncTabIndicators();
 }
 
 function changePasswordModalHtml() {
@@ -2364,6 +2454,7 @@ async function handleAction(action, el) {
           ata: q('#new-vehicle-ata').value,
           purchaseDate: q('#new-vehicle-purchase').value,
           warrantyStartDate: q('#new-vehicle-warranty').value || undefined,
+          warrantyEndDate: q('#new-vehicle-warranty-end').value || undefined,
         };
         await api('/api/vehicles', { method: 'POST', body: JSON.stringify(body) });
         toast(t('toast.vehicle_added'), 'success');
@@ -2381,6 +2472,7 @@ async function handleAction(action, el) {
           ata: q('#edit-vehicle-ata').value,
           purchaseDate: q('#edit-vehicle-purchase').value,
           warrantyStartDate: q('#edit-vehicle-warranty').value || null,
+          warrantyEndDate: q('#edit-vehicle-warranty-end').value || null,
         };
         await api(`/api/vehicles/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
         toast(t('toast.vehicle_updated'), 'success');
@@ -2565,6 +2657,19 @@ document.addEventListener('input', (e) => {
       q('#vehicles-search-input')?.focus();
     }, 350);
   }
+});
+
+// A resize can shift .tab-btn widths/positions (e.g. label wrapping at a
+// narrower viewport) without any state change triggering a render() — snap
+// the indicators back into place instantly rather than leaving them
+// misaligned until the next click-driven render.
+let tabIndicatorResizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(tabIndicatorResizeTimer);
+  tabIndicatorResizeTimer = setTimeout(() => {
+    Object.keys(tabIndicatorRects).forEach(k => delete tabIndicatorRects[k]);
+    syncTabIndicators();
+  }, 120);
 });
 
 boot();

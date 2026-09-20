@@ -9,10 +9,16 @@ const {
 const router = express.Router();
 router.use(requireAuth);
 
-// Catalog administrators manage services only — they have no business here.
+// Only the four workflow roles have any business here — Catalog
+// administrators manage services/accounts/branches/vehicles instead, and
+// Warranty Checker accounts are restricted to VIN warranty lookups only. An
+// explicit allowlist (rather than naming just the roles to exclude) means
+// any future role is denied by default unless someone deliberately adds it
+// here.
+const REQUEST_WORKFLOW_ROLES = ['SALES', 'SALES_MANAGER', 'FINANCE', 'AFTERSALES_TEAM'];
 router.use((req, res, next) => {
-  if (req.user.role === 'AFTER_SALES_ADMIN') {
-    return next(new ApiError(403, 'Catalog administrators do not have access to service requests.', 'ADMIN_NO_REQUEST_ACCESS'));
+  if (!REQUEST_WORKFLOW_ROLES.includes(req.user.role)) {
+    return next(new ApiError(403, 'This account does not have access to service requests.', 'ADMIN_NO_REQUEST_ACCESS'));
   }
   next();
 });
