@@ -315,7 +315,11 @@ function reconcileShape() {
   const hasBranches = Array.isArray(db.branches) && db.branches.length > 0;
   const usersHaveBranchField = Array.isArray(db.users) &&
     db.users.every(u => (u.role !== 'SALES' && u.role !== 'AFTERSALES_TEAM') || 'branchId' in u);
-  const hasVehicles = Array.isArray(db.vehicles);
+  // Vehicles live in their own Postgres table (see vehiclesStore.js), not in
+  // this JSONB blob, once USE_POSTGRES is on — so their absence from db here
+  // is the expected, migrated-away state, not a sign of stale/incompatible
+  // data. Only file-mode (local dev) still expects db.vehicles as an array.
+  const hasVehicles = USE_POSTGRES || Array.isArray(db.vehicles);
 
   if (!hasAllExpectedRoles || !hasBranches || !usersHaveBranchField || !hasVehicles) {
     console.warn('');
@@ -415,11 +419,25 @@ function nextRequestNumber() {
   return `REQ-${year}-${String(db.seq.request).padStart(6, '0')}`;
 }
 
+// In Postgres mode, vehicles are stored in their own table (see
+// vehiclesStore.js) and must NOT be written back into the blob — otherwise
+// the next boot would see a populated db.vehicles and try to re-migrate it.
+// The seed vehicles are handed back to the caller (server/reset.js) so it
+// can reset the real vehicles table itself via vehiclesStore.resetToSeed().
+// In file mode, vehicles stay part of the blob exactly as before.
 async function resetToSeed() {
   const fresh = buildSeed();
+  if (USE_POSTGRES) {
+    const { vehicles: seedVehicles, ...rest } = fresh;
+    Object.keys(db).forEach(k => delete db[k]);
+    Object.assign(db, rest);
+    await persist();
+    return { seedVehicles };
+  }
   Object.keys(db).forEach(k => delete db[k]);
   Object.assign(db, fresh);
   await persist();
+  return { seedVehicles: null };
 }
 
-module.exports = { db, init, persist, uuid: uuidv4, nextRequestNumber, resetToSeed, DATA_FILE, USE_POSTGRES };
+module.exports = { db, init, persist, uuid: uuidv4, nextRequestNumber, resetToSeed, DATA_FILE, USE_POSTGRES, pgPool };

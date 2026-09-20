@@ -1,8 +1,12 @@
-require('dotenv').config();
+// quiet: true — dotenv (as of v16.4+) otherwise prints a random promotional
+// "tip" line (dotenvx/dotenv-vault/third-party sponsor plugs) to the
+// console on every boot, which has no place in this app's production logs.
+require('dotenv').config({ quiet: true });
 const path = require('path');
 const express = require('express');
 
 const { init } = require('./db');
+const vehiclesStore = require('./vehiclesStore');
 const authRoutes = require('./routes/auth');
 const serviceRoutes = require('./routes/services');
 const requestRoutes = require('./routes/requests');
@@ -64,6 +68,10 @@ async function start() {
   // Populate the shared db object (from Postgres if DATABASE_URL is set,
   // otherwise the local JSON file) before accepting any requests.
   await init();
+  // Vehicles have their own store (see vehiclesStore.js) — this creates its
+  // table on first boot and, if an older deployment's data still has
+  // vehicles sitting inside the db blob above, migrates them out once.
+  await vehiclesStore.init();
 
   app.listen(PORT, () => {
     console.log('');

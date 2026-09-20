@@ -2,7 +2,8 @@ const express = require('express');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
 const { Readable } = require('stream');
-const { db, uuid, persist } = require('../db');
+const { uuid, persist } = require('../db');
+const vehiclesStore = require('../vehiclesStore');
 const { requireAuth, requireRole } = require('../auth');
 const { ApiError, logAudit } = require('../stateMachine');
 const { parseDateOnly, fmt, todayDateOnly, computeWarrantyStart, checkCoverage } = require('../warranty');
@@ -66,33 +67,29 @@ function parseVehicleDates(body, { partial = false } = {}) {
 // Paginated + searchable — at real-export scale (hundreds of thousands of
 // vehicles) this must never hand the whole table to the client in one
 // response, and the admin UI below only ever requests one page.
-router.get('/', requireRole('AFTER_SALES_ADMIN'), (req, res) => {
-  const search = String(req.query.search || '').trim().toUpperCase();
-  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-  const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 50));
+router.get('/', requireRole('AFTER_SALES_ADMIN'), async (req, res, next) => {
+  try {
+    const search = String(req.query.search || '').trim().toUpperCase();
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 50));
 
-  let list = search ? db.vehicles.filter(v => v.vin.includes(search)) : db.vehicles;
-  list = [...list].sort((a, b) => a.vin.localeCompare(b.vin));
+    const { vehicles, total, page: currentPage, totalPages } = await vehiclesStore.list({ search, page, pageSize });
 
-  const total = list.length;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const start = (currentPage - 1) * pageSize;
-
-  res.json({
-    vehicles: list.slice(start, start + pageSize).map(publicVehicle),
-    total,
-    page: currentPage,
-    pageSize,
-    totalPages,
-  });
+    res.json({
+      vehicles: vehicles.map(publicVehicle),
+      total,
+      page: currentPage,
+      pageSize,
+      totalPages,
+    });
+  } catch (err) { next(err); }
 });
 
 router.post('/', requireRole('AFTER_SALES_ADMIN'), async (req, res, next) => {
   try {
     const vin = String(req.body?.vin || '').trim().toUpperCase();
     if (!vin) throw new ApiError(400, 'VIN is required.', 'INVALID_VEHICLE_DATA');
-    if (db.vehicles.some(v => v.vin.toUpperCase() === vin)) {
+    if (await vehiclesStore.existsByVin(vin)) {
       throw new ApiError(409, `A vehicle with VIN "${vin}" already exists.`, 'VIN_IN_USE');
     }
     const { ataDate, purchaseDate, warrantyStartDate } = parseVehicleDates(req.body);
@@ -113,7 +110,7 @@ router.post('/', requireRole('AFTER_SALES_ADMIN'), async (req, res, next) => {
       createdAt: now,
       updatedAt: now,
     };
-    db.vehicles.push(vehicle);
+    await vehiclesStore.create(vehicle);
     logAudit({ entityType: 'VEHICLE', entityId: vehicle.id, action: 'CREATE', actor: req.user, diff: { after: vehicle } });
     await persist();
     res.status(201).json({ vehicle: publicVehicle(vehicle) });
@@ -131,7 +128,7 @@ router.post('/bulk-import', requireRole('AFTER_SALES_ADMIN'), async (req, res, n
     const created = [];
     const skipped = [];
     const now = new Date().toISOString();
-    const seenVins = new Set(db.vehicles.map(v => v.vin.toUpperCase()));
+    const seenVins = await vehiclesStore.existingVinSet();
 
     rows.forEach((raw, idx) => {
       const rowNum = idx + 2; // +1 for header row, +1 for 1-indexing
@@ -159,12 +156,12 @@ router.post('/bulk-import', requireRole('AFTER_SALES_ADMIN'), async (req, res, n
         createdAt: now,
         updatedAt: now,
       };
-      db.vehicles.push(vehicle);
       seenVins.add(vin);
       created.push(vehicle);
     });
 
     if (created.length) {
+      await vehiclesStore.bulkInsert(created);
       logAudit({ entityType: 'VEHICLE', entityId: null, action: 'BULK_IMPORT', actor: req.user, diff: { createdCount: created.length, skippedCount: skipped.length } });
       await persist();
     }
@@ -248,7 +245,21 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
     let totalDataRows = 0;
     const skippedSample = [];
     const now = new Date().toISOString();
-    const seenVins = new Set(db.vehicles.map(v => v.vin.toUpperCase()));
+    const seenVins = await vehiclesStore.existingVinSet();
+
+    // Rows are buffered here and flushed to storage in batches (see
+    // flushPending below) rather than accumulating for the whole file and
+    // writing once — for a real 100,000+ row export this keeps memory
+    // bounded to one batch instead of the entire import, and (in Postgres
+    // mode) means the import survives being interrupted partway through
+    // instead of losing everything back to the last full-file write.
+    const FLUSH_CHUNK_SIZE = 2000;
+    let pending = [];
+    async function flushPending() {
+      if (!pending.length) return;
+      await vehiclesStore.bulkInsert(pending);
+      pending = [];
+    }
 
     // rowValues is a sparse 1-indexed array — rowValues[n] is column n,
     // exactly like ExcelJS's own row.values, so both the streaming XLSX
@@ -299,7 +310,7 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
         createdAt: now,
         updatedAt: now,
       };
-      db.vehicles.push(vehicle);
+      pending.push(vehicle);
       seenVins.add(vin);
       created += 1;
     }
@@ -309,7 +320,10 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
         // CSV files are read the plain (non-streaming) way — a CSV of even
         // a few hundred thousand rows is a small fraction of the size an
         // equivalent .xlsx would be, so this stays fast without the extra
-        // complexity of the streaming reader.
+        // complexity of interleaving batch flushes into the parse itself;
+        // the whole file's valid rows are buffered here and flushed once
+        // below, same as the old single-write behavior (this is still a
+        // one-request-scoped buffer, never a permanent part of app memory).
         const workbook = new ExcelJS.Workbook();
         await workbook.csv.read(Readable.from(req.file.buffer));
         const worksheet = workbook.worksheets[0];
@@ -321,7 +335,9 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
         // an in-memory model of every cell in every column before we ever
         // get to read the 3-4 we actually need, which is what makes a big
         // export slow to import. The streaming reader parses and discards
-        // one row at a time instead, which is the whole difference here.
+        // one row at a time instead, which is the whole difference here —
+        // and because this loop can await, it also flushes to storage every
+        // FLUSH_CHUNK_SIZE rows instead of buffering the entire file.
         const workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(Readable.from(req.file.buffer), {
           entries: 'emit', sharedStrings: 'cache', styles: 'cache', hyperlinks: 'ignore', worksheets: 'emit',
         });
@@ -330,6 +346,7 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
           sawAnySheet = true;
           for await (const row of worksheetReader) {
             processRow(row.number, row.values);
+            if (pending.length >= FLUSH_CHUNK_SIZE) await flushPending();
           }
           break; // only the first worksheet, same as the CSV/plain-load path
         }
@@ -345,9 +362,12 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
       throw new ApiError(400, 'Could not find VIN, ATA, and Purchase Date columns in the file\'s header row.', 'INVALID_VEHICLE_DATA');
     }
 
-    // A single persist() for the whole batch, however many rows it was —
-    // never one disk write per row.
+    // Flush whatever's left (the CSV path's whole batch, or the streaming
+    // path's last partial chunk), then a single persist() of the app's
+    // small JSON blob for the audit-log entry — never one disk write per
+    // vehicle row.
     if (created) {
+      await flushPending();
       logAudit({
         entityType: 'VEHICLE', entityId: null, action: 'BULK_IMPORT', actor: req.user,
         diff: { createdCount: created, skippedCount, totalRows: totalDataRows, source: req.file.originalname || null },
@@ -369,28 +389,30 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
 
 router.patch('/:id', requireRole('AFTER_SALES_ADMIN'), async (req, res, next) => {
   try {
-    const vehicle = db.vehicles.find(v => v.id === req.params.id);
+    const vehicle = await vehiclesStore.findById(req.params.id);
     if (!vehicle) throw new ApiError(404, 'Vehicle not found.');
     const before = { ...vehicle };
+    const patch = {};
 
     if (req.body?.vin !== undefined) {
       const vin = String(req.body.vin || '').trim().toUpperCase();
       if (!vin) throw new ApiError(400, 'VIN is required.', 'INVALID_VEHICLE_DATA');
-      if (db.vehicles.some(v => v.id !== vehicle.id && v.vin.toUpperCase() === vin)) {
+      if (await vehiclesStore.existsByVin(vin, vehicle.id)) {
         throw new ApiError(409, `A vehicle with VIN "${vin}" already exists.`, 'VIN_IN_USE');
       }
-      vehicle.vin = vin;
+      patch.vin = vin;
     }
 
     const { ataDate, purchaseDate, warrantyStartDate } = parseVehicleDates(req.body, { partial: true });
-    if (ataDate) vehicle.ata = fmt(ataDate);
-    if (purchaseDate) vehicle.purchaseDate = fmt(purchaseDate);
-    if (req.body?.warrantyStartDate !== undefined) vehicle.warrantyStartDate = warrantyStartDate;
+    if (ataDate) patch.ata = fmt(ataDate);
+    if (purchaseDate) patch.purchaseDate = fmt(purchaseDate);
+    if (req.body?.warrantyStartDate !== undefined) patch.warrantyStartDate = warrantyStartDate;
+    patch.updatedAt = new Date().toISOString();
 
-    vehicle.updatedAt = new Date().toISOString();
-    logAudit({ entityType: 'VEHICLE', entityId: vehicle.id, action: 'UPDATE', actor: req.user, diff: { before, after: vehicle } });
+    const updated = await vehiclesStore.update(vehicle.id, patch);
+    logAudit({ entityType: 'VEHICLE', entityId: vehicle.id, action: 'UPDATE', actor: req.user, diff: { before, after: updated } });
     await persist();
-    res.json({ vehicle: publicVehicle(vehicle) });
+    res.json({ vehicle: publicVehicle(updated) });
   } catch (err) { next(err); }
 });
 
@@ -399,9 +421,9 @@ router.patch('/:id', requireRole('AFTER_SALES_ADMIN'), async (req, res, next) =>
 // there's no "in use" guard needed the way there is for services/branches.
 router.delete('/:id', requireRole('AFTER_SALES_ADMIN'), async (req, res, next) => {
   try {
-    const vehicle = db.vehicles.find(v => v.id === req.params.id);
+    const vehicle = await vehiclesStore.findById(req.params.id);
     if (!vehicle) throw new ApiError(404, 'Vehicle not found.');
-    db.vehicles = db.vehicles.filter(v => v.id !== vehicle.id);
+    await vehiclesStore.remove(vehicle.id);
     logAudit({ entityType: 'VEHICLE', entityId: vehicle.id, action: 'DELETE', actor: req.user, diff: { before: vehicle } });
     await persist();
     res.json({ ok: true });
@@ -413,41 +435,43 @@ router.delete('/:id', requireRole('AFTER_SALES_ADMIN'), async (req, res, next) =
 // coverage enters it (the vehicle's own stored purchase date is treated as
 // unreliable per the admin's own data, which is exactly why this date is
 // asked for again here rather than trusted from the vehicle record).
-router.get('/warranty-check', (req, res) => {
-  const vin = String(req.query.vin || '').trim().toUpperCase();
-  if (!vin) throw new ApiError(400, 'A VIN is required.', 'VIN_REQUIRED');
+router.get('/warranty-check', async (req, res, next) => {
+  try {
+    const vin = String(req.query.vin || '').trim().toUpperCase();
+    if (!vin) throw new ApiError(400, 'A VIN is required.', 'VIN_REQUIRED');
 
-  const enteredPurchaseDate = parseDateOnly(req.query.purchaseDate);
-  if (!enteredPurchaseDate) {
-    throw new ApiError(400, 'A valid purchase date, as per the authorized dealer invoice, is required.', 'INVALID_VEHICLE_DATA');
-  }
+    const enteredPurchaseDate = parseDateOnly(req.query.purchaseDate);
+    if (!enteredPurchaseDate) {
+      throw new ApiError(400, 'A valid purchase date, as per the authorized dealer invoice, is required.', 'INVALID_VEHICLE_DATA');
+    }
 
-  const vehicle = db.vehicles.find(v => v.vin.toUpperCase() === vin);
-  if (!vehicle) {
-    throw new ApiError(404, 'No vehicle found with that VIN. Ask the Aftersales Admin to add it to the vehicle data first.', 'VEHICLE_NOT_FOUND');
-  }
-  if (!vehicle.ata) {
-    throw new ApiError(409, 'This vehicle has no ATA date on file, so warranty coverage cannot be calculated yet.', 'MISSING_ATA');
-  }
+    const vehicle = await vehiclesStore.findByVin(vin);
+    if (!vehicle) {
+      throw new ApiError(404, 'No vehicle found with that VIN. Ask the Aftersales Admin to add it to the vehicle data first.', 'VEHICLE_NOT_FOUND');
+    }
+    if (!vehicle.ata) {
+      throw new ApiError(409, 'This vehicle has no ATA date on file, so warranty coverage cannot be calculated yet.', 'MISSING_ATA');
+    }
 
-  const ataDate = parseDateOnly(vehicle.ata);
-  if (enteredPurchaseDate.getTime() < ataDate.getTime()) {
-    throw new ApiError(400, 'The purchase/invoice date cannot be before this vehicle\'s ATA date.', 'PURCHASE_BEFORE_ATA');
-  }
-  const today = todayDateOnly();
-  if (enteredPurchaseDate.getTime() > today.getTime()) {
-    throw new ApiError(400, 'The purchase/invoice date cannot be in the future.', 'PURCHASE_IN_FUTURE');
-  }
+    const ataDate = parseDateOnly(vehicle.ata);
+    if (enteredPurchaseDate.getTime() < ataDate.getTime()) {
+      throw new ApiError(400, 'The purchase/invoice date cannot be before this vehicle\'s ATA date.', 'PURCHASE_BEFORE_ATA');
+    }
+    const today = todayDateOnly();
+    if (enteredPurchaseDate.getTime() > today.getTime()) {
+      throw new ApiError(400, 'The purchase/invoice date cannot be in the future.', 'PURCHASE_IN_FUTURE');
+    }
 
-  const result = checkCoverage({ ata: vehicle.ata, purchaseDate: fmt(enteredPurchaseDate) });
-  const purchaseDateMismatch = !!vehicle.purchaseDate && vehicle.purchaseDate !== fmt(enteredPurchaseDate);
+    const result = checkCoverage({ ata: vehicle.ata, purchaseDate: fmt(enteredPurchaseDate) });
+    const purchaseDateMismatch = !!vehicle.purchaseDate && vehicle.purchaseDate !== fmt(enteredPurchaseDate);
 
-  res.json({
-    vehicle: publicVehicle(vehicle),
-    enteredPurchaseDate: fmt(enteredPurchaseDate),
-    purchaseDateMismatch,
-    ...result,
-  });
+    res.json({
+      vehicle: publicVehicle(vehicle),
+      enteredPurchaseDate: fmt(enteredPurchaseDate),
+      purchaseDateMismatch,
+      ...result,
+    });
+  } catch (err) { next(err); }
 });
 
 // ---- Bulk VIN warranty inquiry (.csv or .xlsx) ----------------------------
@@ -473,6 +497,14 @@ router.post('/warranty-check-bulk', handleVehicleFileUpload, async (req, res, ne
     const today = todayDateOnly();
     const results = [];
 
+    // Pass 1: parse and validate each row's own fields only (no storage
+    // lookups yet) — either a finished error result, or a parsed
+    // {row, vin, enteredPurchaseDate} to resolve against vehicle data in
+    // pass 2. This lets every VIN in the batch be fetched in one query
+    // instead of one lookup per row (the file used to do exactly that
+    // against the entire in-memory vehicle table, which no longer exists).
+    const parsedRows = [];
+
     function processRow(rowNumber, rowValues) {
       if (rowNumber === 1) {
         headerMap = new Map();
@@ -491,64 +523,20 @@ router.post('/warranty-check-bulk', handleVehicleFileUpload, async (req, res, ne
       // but stop computing — an inquiry batch has no reason to be anywhere
       // near the vehicle-import scale, and each row here carries a full
       // per-part breakdown, unlike that endpoint's compact created/skipped tally.
-      if (results.length >= MAX_BULK_CHECK_ROWS) return;
+      if (parsedRows.length >= MAX_BULK_CHECK_ROWS) return;
 
       const vin = String(rowValues[vinCol] ?? '').trim().toUpperCase();
       const enteredPurchaseDate = parseFlexibleDate(rowValues[purchaseCol]);
 
       if (!vin) {
-        results.push({ row: rowNumber, vin: null, ok: false, error: 'Missing VIN.' });
+        parsedRows.push({ row: rowNumber, vin: null, ok: false, error: 'Missing VIN.' });
         return;
       }
       if (!enteredPurchaseDate) {
-        results.push({ row: rowNumber, vin, ok: false, error: 'Missing or unreadable purchase date.' });
+        parsedRows.push({ row: rowNumber, vin, ok: false, error: 'Missing or unreadable purchase date.' });
         return;
       }
-      const vehicle = db.vehicles.find(v => v.vin.toUpperCase() === vin);
-      if (!vehicle) {
-        results.push({ row: rowNumber, vin, ok: false, error: 'No vehicle found with that VIN.' });
-        return;
-      }
-      if (!vehicle.ata) {
-        results.push({ row: rowNumber, vin, ok: false, error: 'This vehicle has no ATA date on file.' });
-        return;
-      }
-      const ataDate = parseDateOnly(vehicle.ata);
-      if (enteredPurchaseDate.getTime() < ataDate.getTime()) {
-        results.push({ row: rowNumber, vin, ok: false, error: 'The purchase date entered is before this vehicle\'s ATA date.' });
-        return;
-      }
-      if (enteredPurchaseDate.getTime() > today.getTime()) {
-        results.push({ row: rowNumber, vin, ok: false, error: 'The purchase date entered is in the future.' });
-        return;
-      }
-
-      const check = checkCoverage({ ata: vehicle.ata, purchaseDate: fmt(enteredPurchaseDate) });
-      const purchaseDateMismatch = !!vehicle.purchaseDate && vehicle.purchaseDate !== fmt(enteredPurchaseDate);
-      const notCoveredParts = check.parts.filter(p => !p.covered).map(p => p.label);
-
-      results.push({
-        row: rowNumber,
-        vin,
-        ok: true,
-        ata: vehicle.ata,
-        purchaseDateOnFile: vehicle.purchaseDate,
-        enteredPurchaseDate: fmt(enteredPurchaseDate),
-        purchaseDateMismatch,
-        warrantyStartDate: check.warrantyStartDate,
-        warrantyStartAutoTriggered: check.warrantyStartAutoTriggered,
-        coveredCount: check.parts.length - notCoveredParts.length,
-        notCoveredCount: notCoveredParts.length,
-        notCoveredParts,
-        // Full per-part covered/not-covered breakdown, in the same fixed
-        // order for every vehicle (the special-period part catalog is the
-        // same 14 parts regardless of VIN) — this is what lets the results
-        // CSV give each part its own column. `reasons` is carried through so
-        // a "not covered" cell can say WHY (computed from this specific
-        // VIN's actual ATA/purchase/warranty-start dates), not just the bare
-        // word "Not covered" for every row.
-        parts: check.parts.map(p => ({ label: p.label, covered: p.covered, reasons: p.reasons })),
-      });
+      parsedRows.push({ row: rowNumber, vin, enteredPurchaseDate });
     }
 
     try {
@@ -580,6 +568,62 @@ router.post('/warranty-check-bulk', handleVehicleFileUpload, async (req, res, ne
     if (!headerMap) throw new ApiError(400, 'That file has no rows to check.', 'NO_ROWS');
     if (!vinCol || !purchaseCol) {
       throw new ApiError(400, 'Could not find VIN and Purchase Date columns in the file\'s header row.', 'INVALID_VEHICLE_DATA');
+    }
+
+    // Pass 2: one batched fetch for every distinct VIN in the file, then
+    // resolve each parsed row against it in memory.
+    const vinsToLookUp = parsedRows.filter(r => r.vin && r.enteredPurchaseDate).map(r => r.vin);
+    const vehiclesByVin = await vehiclesStore.findManyByVins(vinsToLookUp);
+
+    for (const parsed of parsedRows) {
+      if (parsed.ok === false) { results.push(parsed); continue; } // already a finished error result from pass 1
+      const { row: rowNumber, vin, enteredPurchaseDate } = parsed;
+
+      const vehicle = vehiclesByVin.get(vin);
+      if (!vehicle) {
+        results.push({ row: rowNumber, vin, ok: false, error: 'No vehicle found with that VIN.' });
+        continue;
+      }
+      if (!vehicle.ata) {
+        results.push({ row: rowNumber, vin, ok: false, error: 'This vehicle has no ATA date on file.' });
+        continue;
+      }
+      const ataDate = parseDateOnly(vehicle.ata);
+      if (enteredPurchaseDate.getTime() < ataDate.getTime()) {
+        results.push({ row: rowNumber, vin, ok: false, error: 'The purchase date entered is before this vehicle\'s ATA date.' });
+        continue;
+      }
+      if (enteredPurchaseDate.getTime() > today.getTime()) {
+        results.push({ row: rowNumber, vin, ok: false, error: 'The purchase date entered is in the future.' });
+        continue;
+      }
+
+      const check = checkCoverage({ ata: vehicle.ata, purchaseDate: fmt(enteredPurchaseDate) });
+      const purchaseDateMismatch = !!vehicle.purchaseDate && vehicle.purchaseDate !== fmt(enteredPurchaseDate);
+      const notCoveredParts = check.parts.filter(p => !p.covered).map(p => p.label);
+
+      results.push({
+        row: rowNumber,
+        vin,
+        ok: true,
+        ata: vehicle.ata,
+        purchaseDateOnFile: vehicle.purchaseDate,
+        enteredPurchaseDate: fmt(enteredPurchaseDate),
+        purchaseDateMismatch,
+        warrantyStartDate: check.warrantyStartDate,
+        warrantyStartAutoTriggered: check.warrantyStartAutoTriggered,
+        coveredCount: check.parts.length - notCoveredParts.length,
+        notCoveredCount: notCoveredParts.length,
+        notCoveredParts,
+        // Full per-part covered/not-covered breakdown, in the same fixed
+        // order for every vehicle (the special-period part catalog is the
+        // same 14 parts regardless of VIN) — this is what lets the results
+        // CSV give each part its own column. `reasons` is carried through so
+        // a "not covered" cell can say WHY (computed from this specific
+        // VIN's actual ATA/purchase/warranty-start dates), not just the bare
+        // word "Not covered" for every row.
+        parts: check.parts.map(p => ({ label: p.label, covered: p.covered, reasons: p.reasons })),
+      });
     }
 
     logAudit({
