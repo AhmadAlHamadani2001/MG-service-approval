@@ -43,6 +43,7 @@ const state = {
   editingVehicleId: null,
   vehicleBulkImportOpen: false,
   vehicleImportBusy: false,
+  vehicleImportProgress: 0,
   vehicleImportSummary: null,
   vehiclesPage: 1,
   vehiclesPageSize: 50,
@@ -54,6 +55,7 @@ const state = {
   vinCheckError: '',
   vinBulkOpen: false,
   vinBulkBusy: false,
+  vinBulkProgress: 0,
   vinBulkResult: null,
   changePasswordOpen: false,
   changePasswordBusy: false,
@@ -120,6 +122,38 @@ async function api(path, opts = {}) {
     throw new Error(msg);
   }
   return data;
+}
+
+// fetch() has no way to observe upload progress, so the two real file
+// uploads (vehicle bulk import, VIN bulk check) go through XMLHttpRequest
+// instead so their progress bar can track actual bytes sent — this only
+// covers the upload itself, not the server-side parsing/import time after
+// the upload completes, which is why callers still show a "processing"
+// spinner once onProgress reports 100.
+function apiUpload(path, formData, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', path);
+    if (state.token) xhr.setRequestHeader('Authorization', `Bearer ${state.token}`);
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+    }
+    xhr.onload = () => {
+      let data = null;
+      try { data = JSON.parse(xhr.responseText); } catch (e) { /* no body */ }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data);
+        return;
+      }
+      const code = data && data.code;
+      const msg = code && I18N.has(`errors.${code}`) ? t(`errors.${code}`) : (data && data.error) || `Request failed (${xhr.status})`;
+      reject(new Error(msg));
+    };
+    xhr.onerror = () => reject(new Error(t('common.upload_network_error')));
+    xhr.send(formData);
+  });
 }
 
 // ------------------------------------------------------------------ boot -
@@ -1439,6 +1473,27 @@ function downloadVehicleTemplate() {
   URL.revokeObjectURL(url);
 }
 
+// Shared progress UI for the two real file uploads (vehicle bulk import,
+// VIN bulk check) — a thin percentage bar while bytes are still going up,
+// then the existing "processing" spinner once the upload itself is done and
+// the browser is just waiting on the server to parse/import the file.
+function uploadProgressHtml(pct) {
+  if (pct >= 100) {
+    return `
+      <div class="text-[12.5px] text-ink/60 mt-g3 flex items-center gap-2">
+        <span class="inline-block w-3.5 h-3.5 border-2 border-mgred border-t-transparent rounded-full animate-spin"></span>
+        ${t('admin.vehicle_import_processing')}
+      </div>`;
+  }
+  return `
+    <div class="mt-g3">
+      <div class="h-1.5 rounded-full bg-surface-container overflow-hidden">
+        <div class="h-full bg-mgred rounded-full transition-[width] duration-150 ease-out" style="width: ${pct}%"></div>
+      </div>
+      <div class="text-[11.5px] text-ink/50 mt-1 tabular-nums">${t('common.upload_progress', { pct })}</div>
+    </div>`;
+}
+
 // Vehicle import goes through a real file upload (multipart FormData), not
 // client-side CSV parsing + a JSON body — the file can be a real dealer
 // export with hundreds of thousands of rows, and the server (routes/
@@ -1447,14 +1502,19 @@ function downloadVehicleTemplate() {
 // "Purchase Date" columns). Never build a giant in-browser array here.
 async function handleVehicleBulkImportFile(file) {
   state.vehicleImportBusy = true;
+  state.vehicleImportProgress = 0;
   state.vehicleImportSummary = null;
   render();
   try {
     const formData = new FormData();
     formData.append('file', file);
-    const result = await api('/api/vehicles/bulk-import-file', { method: 'POST', body: formData });
+    const result = await apiUpload('/api/vehicles/bulk-import-file', formData, (pct) => {
+      if (pct === state.vehicleImportProgress) return;
+      state.vehicleImportProgress = pct;
+      render();
+    });
     state.vehicleImportSummary = result;
-    toast(t('bulk.result_vehicles', { created: result.createdCount, skipped: result.skippedCount }), result.createdCount ? 'success' : 'error');
+    toast(t('bulk.result_vehicles', { created: result.createdCount, updated: result.updatedCount, skipped: result.skippedCount }), (result.createdCount || result.updatedCount) ? 'success' : 'error');
     state.vehiclesPage = 1;
     state.vehiclesSearch = '';
     state.vehicleImportBusy = false;
@@ -1469,7 +1529,7 @@ async function handleVehicleBulkImportFile(file) {
 function vehicleImportSummaryHtml() {
   const s = state.vehicleImportSummary;
   if (!s) return '';
-  const summary = t('bulk.result_vehicles', { created: s.createdCount, skipped: s.skippedCount });
+  const summary = t('bulk.result_vehicles', { created: s.createdCount, updated: s.updatedCount, skipped: s.skippedCount });
   const skippedList = s.skippedSample && s.skippedSample.length
     ? '<ul class="mt-1 ps-4 list-disc text-ink/60 max-h-48 overflow-y-auto">' +
         s.skippedSample.map(row => `<li>${esc(t('bulk.skipped_row', { row: row.row, code: row.vin ? ` (${row.vin})` : '', reason: row.reason }))}</li>`).join('') +
@@ -1542,11 +1602,7 @@ function renderAdminVehicles() {
         <button class="btn btn-ghost-light btn-sm" data-action="cancel-vehicle-bulk-import">${t('common.cancel')}</button>
         <input type="file" id="vehicle-bulk-import-file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden">
       </div>
-      ${state.vehicleImportBusy ? `
-        <div class="text-[12.5px] text-ink/60 mt-g3 flex items-center gap-2">
-          <span class="inline-block w-3.5 h-3.5 border-2 border-mgred border-t-transparent rounded-full animate-spin"></span>
-          ${t('admin.vehicle_import_processing')}
-        </div>` : ''}
+      ${state.vehicleImportBusy ? uploadProgressHtml(state.vehicleImportProgress) : ''}
       ${vehicleImportSummaryHtml()}
     </div>` : '';
 
@@ -1616,12 +1672,17 @@ function downloadVinBulkTemplate() {
 // a couple thousand from their own tracking sheet.
 async function handleVinBulkCheckFile(file) {
   state.vinBulkBusy = true;
+  state.vinBulkProgress = 0;
   state.vinBulkResult = null;
   render();
   try {
     const formData = new FormData();
     formData.append('file', file);
-    const result = await api('/api/vehicles/warranty-check-bulk', { method: 'POST', body: formData });
+    const result = await apiUpload('/api/vehicles/warranty-check-bulk', formData, (pct) => {
+      if (pct === state.vinBulkProgress) return;
+      state.vinBulkProgress = pct;
+      render();
+    });
     state.vinBulkResult = result;
     state.vinBulkBusy = false;
     render();
@@ -1779,11 +1840,7 @@ function renderVinBulkPanel() {
         <button class="btn btn-ghost-light btn-sm" data-action="cancel-vin-bulk-check">${t('common.cancel')}</button>
         <input type="file" id="vin-bulk-check-file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden">
       </div>
-      ${state.vinBulkBusy ? `
-        <div class="text-[12.5px] text-ink/60 mt-g3 flex items-center gap-2">
-          <span class="inline-block w-3.5 h-3.5 border-2 border-mgred border-t-transparent rounded-full animate-spin"></span>
-          ${t('admin.vehicle_import_processing')}
-        </div>` : ''}
+      ${state.vinBulkBusy ? uploadProgressHtml(state.vinBulkProgress) : ''}
       ${vinBulkResultHtml()}
     </div>`;
 }

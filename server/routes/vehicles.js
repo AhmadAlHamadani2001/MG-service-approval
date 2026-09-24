@@ -141,10 +141,17 @@ router.post('/bulk-import', requireRole('AFTER_SALES_ADMIN'), async (req, res, n
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
     if (!rows.length) throw new ApiError(400, 'No rows to import.', 'NO_ROWS');
 
-    const created = [];
+    const toImport = [];
     const skipped = [];
     const now = new Date().toISOString();
-    const seenVins = await vehiclesStore.existingVinSet();
+    // Only guards against the same VIN appearing twice within this one
+    // upload — a VIN that already exists in the DATABASE is no longer
+    // skipped here. It's handed to vehiclesStore.bulkInsert below, which
+    // backfills whichever of that vehicle's warranty start/end dates is
+    // still genuinely missing (e.g. re-uploading a sheet that now has a
+    // Warranty End Date column the first import didn't), without ever
+    // overwriting a value that's already on file.
+    const seenInThisFile = new Set();
 
     rows.forEach((raw, idx) => {
       const rowNum = idx + 2; // +1 for header row, +1 for 1-indexing
@@ -160,11 +167,12 @@ router.post('/bulk-import', requireRole('AFTER_SALES_ADMIN'), async (req, res, n
         skipped.push({ row: rowNum, vin: vin || null, reason: 'Missing or invalid fields (vin, ata, and purchaseDate are all required and must be valid dates).' });
         return;
       }
-      if (seenVins.has(vin)) {
-        skipped.push({ row: rowNum, vin, reason: `A vehicle with VIN "${vin}" already exists.` });
+      if (seenInThisFile.has(vin)) {
+        skipped.push({ row: rowNum, vin, reason: `VIN "${vin}" appears more than once in this upload; only the first occurrence was used.` });
         return;
       }
-      const vehicle = {
+      seenInThisFile.add(vin);
+      toImport.push({
         id: uuid(),
         vin,
         ata: fmt(ataDate),
@@ -174,17 +182,17 @@ router.post('/bulk-import', requireRole('AFTER_SALES_ADMIN'), async (req, res, n
         createdBy: req.user.id,
         createdAt: now,
         updatedAt: now,
-      };
-      seenVins.add(vin);
-      created.push(vehicle);
+      });
     });
 
-    if (created.length) {
-      await vehiclesStore.bulkInsert(created);
-      logAudit({ entityType: 'VEHICLE', entityId: null, action: 'BULK_IMPORT', actor: req.user, diff: { createdCount: created.length, skippedCount: skipped.length } });
+    let insertedCount = 0;
+    let updatedCount = 0;
+    if (toImport.length) {
+      ({ insertedCount, updatedCount } = await vehiclesStore.bulkInsert(toImport));
+      logAudit({ entityType: 'VEHICLE', entityId: null, action: 'BULK_IMPORT', actor: req.user, diff: { insertedCount, updatedCount, skippedCount: skipped.length } });
       await persist();
     }
-    res.status(201).json({ created, skipped });
+    res.status(201).json({ createdCount: insertedCount, updatedCount, skipped });
   } catch (err) { next(err); }
 });
 
@@ -260,12 +268,20 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
 
     let headerMap = null;
     let vinCol = null, ataCol = null, purchaseCol = null, warrantyCol = null, warrantyEndCol = null;
-    let created = 0;
+    let insertedCount = 0;
+    let updatedCount = 0;
     let skippedCount = 0;
     let totalDataRows = 0;
     const skippedSample = [];
     const now = new Date().toISOString();
-    const seenVins = await vehiclesStore.existingVinSet();
+    // Only guards against the same VIN appearing twice within this one file
+    // — a VIN that already exists in the DATABASE is no longer skipped
+    // here. It's handed to vehiclesStore.bulkInsert below, which backfills
+    // whichever of that vehicle's warranty start/end dates is still
+    // genuinely missing (e.g. re-uploading a sheet that now has a Warranty
+    // End Date column the first import didn't), without ever overwriting a
+    // value that's already on file.
+    const seenInThisFile = new Set();
 
     // Rows are buffered here and flushed to storage in batches (see
     // flushPending below) rather than accumulating for the whole file and
@@ -277,7 +293,9 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
     let pending = [];
     async function flushPending() {
       if (!pending.length) return;
-      await vehiclesStore.bulkInsert(pending);
+      const result = await vehiclesStore.bulkInsert(pending);
+      insertedCount += result.insertedCount;
+      updatedCount += result.updatedCount;
       pending = [];
     }
 
@@ -314,13 +332,14 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
         }
         return;
       }
-      if (seenVins.has(vin)) {
+      if (seenInThisFile.has(vin)) {
         skippedCount += 1;
         if (skippedSample.length < MAX_SKIPPED_DETAILS) {
-          skippedSample.push({ row: rowNumber, vin, reason: `A vehicle with VIN "${vin}" already exists.` });
+          skippedSample.push({ row: rowNumber, vin, reason: `VIN "${vin}" appears more than once in this file; only the first occurrence was used.` });
         }
         return;
       }
+      seenInThisFile.add(vin);
 
       const vehicle = {
         id: uuid(),
@@ -334,8 +353,6 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
         updatedAt: now,
       };
       pending.push(vehicle);
-      seenVins.add(vin);
-      created += 1;
     }
 
     try {
@@ -389,17 +406,18 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
     // path's last partial chunk), then a single persist() of the app's
     // small JSON blob for the audit-log entry — never one disk write per
     // vehicle row.
-    if (created) {
-      await flushPending();
+    await flushPending();
+    if (insertedCount || updatedCount) {
       logAudit({
         entityType: 'VEHICLE', entityId: null, action: 'BULK_IMPORT', actor: req.user,
-        diff: { createdCount: created, skippedCount, totalRows: totalDataRows, source: req.file.originalname || null },
+        diff: { insertedCount, updatedCount, skippedCount, totalRows: totalDataRows, source: req.file.originalname || null },
       });
       await persist();
     }
 
     res.status(201).json({
-      createdCount: created,
+      createdCount: insertedCount,
+      updatedCount,
       skippedCount,
       totalRows: totalDataRows,
       skippedSample,

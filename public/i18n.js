@@ -10,6 +10,8 @@ const STRINGS = {
     'common.save': 'Save',
     'common.saving': 'Saving…',
     'common.close': 'Close',
+    'common.upload_progress': 'Uploading… {pct}%',
+    'common.upload_network_error': 'The upload failed — check your connection and try again.',
     'common.none': '—',
     'common.total': 'Total',
     'common.labor_hours': 'labor hrs',
@@ -318,7 +320,7 @@ const STRINGS = {
     'toast.vehicle_added': 'Vehicle added.',
     'toast.vehicle_updated': 'Vehicle updated.',
     'toast.vehicle_deleted': 'Vehicle deleted.',
-    'bulk.result_vehicles': '{created} vehicle(s) added, {skipped} skipped.',
+    'bulk.result_vehicles': '{created} vehicle(s) added, {updated} updated, {skipped} skipped.',
   },
 
   ar: {
@@ -329,6 +331,8 @@ const STRINGS = {
     'common.save': 'حفظ',
     'common.saving': 'جارٍ الحفظ…',
     'common.close': 'إغلاق',
+    'common.upload_progress': 'جارٍ الرفع… {pct}%',
+    'common.upload_network_error': 'فشل الرفع — يُرجى التحقق من الاتصال والمحاولة مرة أخرى.',
     'common.none': '—',
     'common.total': 'الإجمالي',
     'common.labor_hours': 'ساعة عمل',
@@ -637,7 +641,7 @@ const STRINGS = {
     'toast.vehicle_added': 'تمت إضافة المركبة.',
     'toast.vehicle_updated': 'تم تحديث بيانات المركبة.',
     'toast.vehicle_deleted': 'تم حذف المركبة.',
-    'bulk.result_vehicles': 'تمت إضافة {created} مركبة، وتم تخطي {skipped}.',
+    'bulk.result_vehicles': 'تمت إضافة {created} مركبة، وتحديث {updated}، وتخطي {skipped}.',
   },
 };
 

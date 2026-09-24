@@ -1,9 +1,9 @@
 // Storage for vehicle master data (VIN / ATA / purchase date / warranty
-// start date) — split out from db.js's single JSONB-blob storage because
-// this table is meant to hold a full dealer-management-system export
-// (realistically 100,000+ rows). Keeping that many rows inside the one
-// in-memory "whole app state" blob that db.js reads/writes as a unit meant
-// every single write anywhere in the app — even an unrelated password
+// start + end date) — split out from db.js's single JSONB-blob storage
+// because this table is meant to hold a full dealer-management-system
+// export (realistically 100,000+ rows). Keeping that many rows inside the
+// one in-memory "whole app state" blob that db.js reads/writes as a unit
+// meant every single write anywhere in the app — even an unrelated password
 // change — re-serialized the entire vehicle table to JSON and rewrote it to
 // Postgres, and the whole table sat in process memory at all times. That is
 // what was actually crashing the server under real import volumes, not
@@ -24,9 +24,9 @@
 const { db, persist, USE_POSTGRES, pgPool } = require('./db');
 
 const TABLE = 'vehicles';
-// Chunk size for multi-row INSERTs (bulk import and the one-time legacy
-// migration below). Large enough to keep round-trips down, small enough
-// that one statement's parameter list and payload stay modest.
+// Chunk size for multi-row INSERTs/UPSERTs (bulk import and the one-time
+// legacy migration below). Large enough to keep round-trips down, small
+// enough that one statement's parameter list and payload stay modest.
 const INSERT_CHUNK_SIZE = 2000;
 
 function rowToVehicle(row) {
@@ -36,6 +36,10 @@ function rowToVehicle(row) {
     ata: row.ata,
     purchaseDate: row.purchase_date,
     warrantyStartDate: row.warranty_start_date,
+    // The dealer's own on-file end date, when their sheet has one — separate
+    // from (and not a substitute for) the per-part computed coverage-end
+    // dates the VIN warranty-check computes live.
+    warrantyEndDate: row.warranty_end_date,
     createdBy: row.created_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -63,30 +67,61 @@ async function pgEnsureTable() {
       updated_at TEXT NOT NULL
     )
   `);
+  // Added after the table already existed in some deployments — safe to
+  // run on every boot, a no-op once the column is there.
+  await pgPool.query(`ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS warranty_end_date TEXT`);
 }
 
-// Inserts a batch of already-built vehicle objects, chunked, using
-// ON CONFLICT DO NOTHING so it's always safe to call even if some VINs
-// already exist (used by both real bulk-import and the legacy migration
-// below). Returns the number of rows actually inserted.
+// Inserts a batch of already-built vehicle objects, chunked. Brand-new VINs
+// are inserted outright. A VIN that already exists is never overwritten
+// wholesale — bulk import (especially a re-uploaded sheet meant to fill in
+// a column that wasn't in the file the first time, like warranty end date)
+// only BACKFILLS whichever of warranty_start_date / warranty_end_date is
+// still genuinely NULL on the existing row; it never clobbers a value
+// someone already has on file, whether from an earlier import or a manual
+// admin correction. Returns { insertedCount, updatedCount }.
 async function pgBulkInsert(vehicles) {
   let insertedCount = 0;
+  let updatedCount = 0;
   for (const part of chunk(vehicles, INSERT_CHUNK_SIZE)) {
     if (!part.length) continue;
-    const cols = ['id', 'vin', 'ata', 'purchase_date', 'warranty_start_date', 'created_by', 'created_at', 'updated_at'];
+    const cols = ['id', 'vin', 'ata', 'purchase_date', 'warranty_start_date', 'warranty_end_date', 'created_by', 'created_at', 'updated_at'];
     const values = [];
     const placeholders = part.map((v, i) => {
       const base = i * cols.length;
-      values.push(v.id, v.vin, v.ata, v.purchaseDate, v.warrantyStartDate, v.createdBy, v.createdAt, v.updatedAt);
+      values.push(v.id, v.vin, v.ata, v.purchaseDate, v.warrantyStartDate, v.warrantyEndDate || null, v.createdBy, v.createdAt, v.updatedAt);
       return `(${cols.map((_, j) => `$${base + j + 1}`).join(', ')})`;
     });
-    const res = await pgPool.query(
+    const insertRes = await pgPool.query(
       `INSERT INTO ${TABLE} (${cols.join(', ')}) VALUES ${placeholders.join(', ')} ON CONFLICT (vin) DO NOTHING RETURNING vin`,
       values
     );
-    insertedCount += res.rowCount;
+    insertedCount += insertRes.rowCount;
+    const insertedVins = new Set(insertRes.rows.map(r => r.vin));
+
+    const toBackfill = part.filter(v => !insertedVins.has(v.vin));
+    if (toBackfill.length) {
+      const bCols = ['vin', 'warranty_start_date', 'warranty_end_date', 'updated_at'];
+      const bValues = [];
+      const bPlaceholders = toBackfill.map((v, i) => {
+        const base = i * bCols.length;
+        bValues.push(v.vin, v.warrantyStartDate || null, v.warrantyEndDate || null, v.updatedAt);
+        return `(${bCols.map((_, j) => `$${base + j + 1}`).join(', ')})`;
+      });
+      const updateRes = await pgPool.query(
+        `UPDATE ${TABLE} v SET
+           warranty_start_date = COALESCE(v.warranty_start_date, data.warranty_start_date),
+           warranty_end_date = COALESCE(v.warranty_end_date, data.warranty_end_date),
+           updated_at = CASE WHEN v.warranty_start_date IS NULL OR v.warranty_end_date IS NULL THEN data.updated_at ELSE v.updated_at END
+         FROM (VALUES ${bPlaceholders.join(', ')}) AS data(${bCols.join(', ')})
+         WHERE v.vin = data.vin AND (v.warranty_start_date IS NULL OR v.warranty_end_date IS NULL)
+         RETURNING v.vin`,
+        bValues
+      );
+      updatedCount += updateRes.rowCount;
+    }
   }
-  return insertedCount;
+  return { insertedCount, updatedCount };
 }
 
 async function pgList({ search, page, pageSize }) {
@@ -144,9 +179,9 @@ async function pgExistingVinSet() {
 
 async function pgCreate(vehicle) {
   await pgPool.query(
-    `INSERT INTO ${TABLE} (id, vin, ata, purchase_date, warranty_start_date, created_by, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [vehicle.id, vehicle.vin, vehicle.ata, vehicle.purchaseDate, vehicle.warrantyStartDate, vehicle.createdBy, vehicle.createdAt, vehicle.updatedAt]
+    `INSERT INTO ${TABLE} (id, vin, ata, purchase_date, warranty_start_date, warranty_end_date, created_by, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [vehicle.id, vehicle.vin, vehicle.ata, vehicle.purchaseDate, vehicle.warrantyStartDate, vehicle.warrantyEndDate || null, vehicle.createdBy, vehicle.createdAt, vehicle.updatedAt]
   );
   return vehicle;
 }
@@ -159,6 +194,7 @@ async function pgUpdate(id, patch) {
   if ('ata' in patch) setCol('ata', patch.ata);
   if ('purchaseDate' in patch) setCol('purchase_date', patch.purchaseDate);
   if ('warrantyStartDate' in patch) setCol('warranty_start_date', patch.warrantyStartDate);
+  if ('warrantyEndDate' in patch) setCol('warranty_end_date', patch.warrantyEndDate);
   setCol('updated_at', patch.updatedAt);
   values.push(id);
   const res = await pgPool.query(
@@ -182,13 +218,14 @@ async function pgResetToSeed(seedVehicles) {
 // vehicles inside db.js's single JSONB blob, as db.vehicles. If that array
 // is still sitting in the freshly-loaded blob, move its rows into the real
 // table and strip it out of the blob so it never gets reprocessed. Safe to
-// call on every boot — ON CONFLICT DO NOTHING makes it a no-op once the
-// migration has already happened, and it only ever touches db.vehicles.
+// call on every boot — inserting is a no-op once the migration has already
+// happened (existing rows just get their usual backfill check), and it only
+// ever touches db.vehicles.
 async function pgMigrateLegacyBlobVehicles() {
   if (!Array.isArray(db.vehicles) || !db.vehicles.length) return { migrated: 0 };
   const legacy = db.vehicles;
   console.log(`  [mg-approval] Migrating ${legacy.length} vehicle record(s) out of the old JSON blob into their own Postgres table (one-time)...`);
-  const insertedCount = await pgBulkInsert(legacy);
+  const { insertedCount } = await pgBulkInsert(legacy);
   delete db.vehicles;
   await persist();
   console.log(`  [mg-approval] Vehicle migration complete: ${insertedCount} row(s) inserted (${legacy.length - insertedCount} already present).`);
@@ -240,9 +277,34 @@ function fileCreate(vehicle) {
   return vehicle;
 }
 
+// Mirrors pgBulkInsert's semantics: new VINs are inserted, a VIN that
+// already exists only gets its still-NULL warranty start/end dates
+// backfilled, never overwritten.
 function fileBulkInsert(vehicles) {
-  db.vehicles.push(...vehicles);
-  return vehicles.length;
+  let insertedCount = 0;
+  let updatedCount = 0;
+  for (const v of vehicles) {
+    const existing = db.vehicles.find(e => e.vin.toUpperCase() === v.vin.toUpperCase());
+    if (!existing) {
+      db.vehicles.push(v);
+      insertedCount += 1;
+      continue;
+    }
+    let changed = false;
+    if (existing.warrantyStartDate == null && v.warrantyStartDate != null) {
+      existing.warrantyStartDate = v.warrantyStartDate;
+      changed = true;
+    }
+    if (existing.warrantyEndDate == null && v.warrantyEndDate != null) {
+      existing.warrantyEndDate = v.warrantyEndDate;
+      changed = true;
+    }
+    if (changed) {
+      existing.updatedAt = v.updatedAt;
+      updatedCount += 1;
+    }
+  }
+  return { insertedCount, updatedCount };
 }
 
 function fileUpdate(id, patch) {
@@ -306,10 +368,10 @@ async function create(vehicle) {
   return USE_POSTGRES ? pgCreate(vehicle) : fileCreate(vehicle);
 }
 
-// vehicles: already-validated, already-deduped vehicle objects to insert.
-// Returns the number actually inserted.
+// vehicles: already-validated, already-deduped (within this call) vehicle
+// objects to insert or backfill. Returns { insertedCount, updatedCount }.
 async function bulkInsert(vehicles) {
-  if (!vehicles.length) return 0;
+  if (!vehicles.length) return { insertedCount: 0, updatedCount: 0 };
   return USE_POSTGRES ? pgBulkInsert(vehicles) : fileBulkInsert(vehicles);
 }
 
