@@ -1966,43 +1966,49 @@ function buildDisclosureHtml(r) {
   const today = new Date().toISOString().slice(0, 10);
   const notCovered = r.parts.filter(p => !p.covered);
 
-  const autoNoteEn = r.warrantyStartAutoTriggered
-    ? (r.purchaseDateMismatch
-        ? `If this correction is approved by the manufacturer, the warranty will start on ${esc(r.warrantyStartDate)} — one year after the ATA date (${esc(r.vehicle.ata)}), since the purchase date entered is more than a year after ATA.`
-        : `The warranty start date shown was set one year after the ATA date (${esc(r.vehicle.ata)}), since the purchase date is more than a year after ATA.`)
+  // The "auto one-year-after-ATA" note only explains itself in detail when
+  // the vehicle's own file already agrees with the entered purchase date —
+  // if a correction is pending (purchaseDateMismatch), that whole
+  // explanation, the purchase-date-mismatch note, and the warranty-end
+  // date's own explanation all collapse into the single correctionPending
+  // note below instead, since none of it is final until the manufacturer
+  // approves the correction.
+  const autoNoteEn = (r.warrantyStartAutoTriggered && !r.purchaseDateMismatch)
+    ? `The warranty start date shown was set one year after the ATA date (${esc(r.vehicle.ata)}), since the purchase date is more than a year after ATA.`
     : '';
-  const autoNoteAr = r.warrantyStartAutoTriggered
-    ? (r.purchaseDateMismatch
-        ? `في حال اعتماد الشركة المصنّعة لهذا التصحيح، سيبدأ الضمان بتاريخ ${esc(r.warrantyStartDate)} — أي بعد عام واحد من تاريخ ATA (${esc(r.vehicle.ata)})، وذلك لأن تاريخ الشراء المُدخل يتجاوز عامًا من تاريخ ATA.`
-        : `تم تحديد تاريخ بدء الضمان بعد عام واحد من تاريخ ATA (${esc(r.vehicle.ata)})، لأن تاريخ الشراء يتجاوز عامًا من تاريخ ATA.`)
-    : '';
-
-  // The signed disclosure needs to carry the same warranty-end-date and
-  // purchase-date-mismatch information the on-screen result already shows
-  // (renderVinCheckResult's amber notice box) — otherwise a customer could
-  // sign a copy that's missing the vehicle's actual coverage end date, or a
-  // pending correction, even though the app itself displayed it.
-  const mismatchNoteEn = r.purchaseDateMismatch
-    ? `<p class="notice"><strong>This purchase date differs from what is on file.</strong> The vehicle data on file shows a different purchase date. This result uses the date entered above. If that date is correct, ask the Aftersales Admin to update the vehicle record; otherwise, the vehicle registration card and the MG authorized dealer invoice are needed to correct it.</p>`
-    : '';
-  const mismatchNoteAr = r.purchaseDateMismatch
-    ? `<p class="notice"><strong>تاريخ الشراء هذا يختلف عمّا هو مسجل.</strong> تُظهر بيانات المركبة المسجلة تاريخ شراء مختلفًا. تعتمد هذه النتيجة على التاريخ المُدخل أعلاه. إذا كان هذا التاريخ صحيحًا، فاطلب من مدير ما بعد البيع تحديث سجل المركبة؛ وإلا، فإن استمارة تسجيل المركبة وفاتورة الوكيل المعتمد من MG مطلوبتان للتصحيح.</p>`
+  const autoNoteAr = (r.warrantyStartAutoTriggered && !r.purchaseDateMismatch)
+    ? `تم تحديد تاريخ بدء الضمان بعد عام واحد من تاريخ ATA (${esc(r.vehicle.ata)})، لأن تاريخ الشراء يتجاوز عامًا من تاريخ ATA.`
     : '';
 
+  // When a correction is pending manufacturer approval, the disclosure
+  // shows one short statement instead of separately explaining the
+  // mismatch, the auto-start rule, and the projected warranty end date —
+  // the dates in the meta table above already reflect what will apply once
+  // approved (see warrantyEndDisplay below).
+  const correctionPendingNoteEn = r.purchaseDateMismatch
+    ? `<p class="notice">A retail information correction will be submitted to the manufacturer. The dates above will be considered final once the manufacturer approves it.</p>`
+    : '';
+  const correctionPendingNoteAr = r.purchaseDateMismatch
+    ? `<p class="notice">سيتم تقديم تصحيح لبيانات البيع بالتجزئة إلى الشركة المصنّعة. ستُعتمد التواريخ أعلاه بشكل نهائي بعد موافقة الشركة المصنّعة عليه.</p>`
+    : '';
+
+  // Outside a pending correction, the plain on-file explanation still
+  // applies (the term varies by model, confirm the odometer, etc.).
   const warrantyEndTextEn = r.vehicle.warrantyEndDate
     ? `Warranty end date on file: <strong>${esc(r.vehicle.warrantyEndDate)}</strong>. The overall warranty term isn't the same for every model (T60 is 3 years/120,000 km; most other MG models are 6 years/200,000 km; some vehicles carry exceptional terms) — this date reflects this specific vehicle's own record. Confirm the odometer reading at the vehicle, since mileage isn't tracked here.`
     : `No warranty end date is on file for this vehicle yet — ask the Aftersales Admin to add it.`;
   const warrantyEndTextAr = r.vehicle.warrantyEndDate
     ? `تاريخ انتهاء الضمان المسجل: <strong>${esc(r.vehicle.warrantyEndDate)}</strong>. مدة الضمان الإجمالية ليست موحدة لكل الموديلات (T60 مدته 3 سنوات أو 120,000 كم، ومعظم موديلات MG الأخرى 6 سنوات أو 200,000 كم، وبعض المركبات لها مدد استثنائية) — هذا التاريخ يعكس سجل هذه المركبة تحديدًا. يُرجى التأكد من قراءة العداد عند المركبة، لأن هذا النظام لا يسجل قراءة العداد.`
     : `لا يوجد تاريخ انتهاء ضمان مسجل لهذه المركبة بعد — يُرجى طلب إضافته من مدير ما بعد البيع.`;
-  const projectedEndTextEn = r.projectedWarrantyEndDate
-    ? ` If this purchase-date correction is approved by the manufacturer, the warranty end date will update to <strong>${esc(r.projectedWarrantyEndDate)}</strong>.`
-    : '';
-  const projectedEndTextAr = r.projectedWarrantyEndDate
-    ? ` في حال اعتماد الشركة المصنّعة لتصحيح تاريخ الشراء هذا، سيتحدّث تاريخ انتهاء الضمان إلى <strong>${esc(r.projectedWarrantyEndDate)}</strong>.`
-    : '';
-  const warrantyEndNoteEn = `<p class="notice">${warrantyEndTextEn}${projectedEndTextEn}</p>`;
-  const warrantyEndNoteAr = `<p class="notice">${warrantyEndTextAr}${projectedEndTextAr}</p>`;
+  const warrantyEndNoteEn = r.purchaseDateMismatch ? '' : `<p class="notice">${warrantyEndTextEn}</p>`;
+  const warrantyEndNoteAr = r.purchaseDateMismatch ? '' : `<p class="notice">${warrantyEndTextAr}</p>`;
+
+  // The meta table's "Warranty end date" row shows the value that will
+  // actually apply — the projected date once the pending correction is
+  // approved, when one was computable, otherwise the plain on-file date.
+  const warrantyEndDisplay = (r.purchaseDateMismatch && r.projectedWarrantyEndDate)
+    ? r.projectedWarrantyEndDate
+    : r.vehicle.warrantyEndDate;
 
   const notCoveredRowsEn = notCovered.length
     ? notCovered.map(p => `<tr><td>${esc(p.label)}</td><td class="col-reason">${esc((p.reasons || []).join(' '))}</td></tr>`).join('')
@@ -2072,10 +2078,10 @@ function buildDisclosureHtml(r) {
       <tr><td class="label">ATA date</td><td>${esc(r.vehicle.ata)}</td></tr>
       <tr><td class="label">Purchase date entered</td><td>${esc(r.enteredPurchaseDate)}</td></tr>
       <tr><td class="label">Warranty start date</td><td><strong>${esc(r.warrantyStartDate)}</strong></td></tr>
-      <tr><td class="label">Warranty end date</td><td><strong>${r.vehicle.warrantyEndDate ? esc(r.vehicle.warrantyEndDate) : 'Not on file'}</strong></td></tr>
+      <tr><td class="label">Warranty end date</td><td><strong>${warrantyEndDisplay ? esc(warrantyEndDisplay) : 'Not on file'}</strong></td></tr>
     </table>
     ${autoNoteEn ? `<p class="notice">${autoNoteEn}</p>` : ''}
-    ${mismatchNoteEn}
+    ${correctionPendingNoteEn}
     ${warrantyEndNoteEn}
 
     <h2>Items not currently covered</h2>
@@ -2098,10 +2104,10 @@ function buildDisclosureHtml(r) {
       <tr><td class="label">تاريخ ATA</td><td>${esc(r.vehicle.ata)}</td></tr>
       <tr><td class="label">تاريخ الشراء المُدخل</td><td>${esc(r.enteredPurchaseDate)}</td></tr>
       <tr><td class="label">تاريخ بدء الضمان</td><td><strong>${esc(r.warrantyStartDate)}</strong></td></tr>
-      <tr><td class="label">تاريخ انتهاء الضمان</td><td><strong>${r.vehicle.warrantyEndDate ? esc(r.vehicle.warrantyEndDate) : 'غير مسجل'}</strong></td></tr>
+      <tr><td class="label">تاريخ انتهاء الضمان</td><td><strong>${warrantyEndDisplay ? esc(warrantyEndDisplay) : 'غير مسجل'}</strong></td></tr>
     </table>
     ${autoNoteAr ? `<p class="notice">${autoNoteAr}</p>` : ''}
-    ${mismatchNoteAr}
+    ${correctionPendingNoteAr}
     ${warrantyEndNoteAr}
 
     <h2>البنود غير المغطاة حاليًا</h2>
