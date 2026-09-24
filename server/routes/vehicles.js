@@ -6,7 +6,7 @@ const { uuid, persist } = require('../db');
 const vehiclesStore = require('../vehiclesStore');
 const { requireAuth, requireRole } = require('../auth');
 const { ApiError, logAudit } = require('../stateMachine');
-const { parseDateOnly, fmt, todayDateOnly, computeWarrantyStart, checkCoverage } = require('../warranty');
+const { parseDateOnly, fmt, todayDateOnly, computeWarrantyStart, checkCoverage, addDays } = require('../warranty');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -489,10 +489,32 @@ router.get('/warranty-check', async (req, res, next) => {
     const result = checkCoverage({ ata: vehicle.ata, purchaseDate: fmt(enteredPurchaseDate) });
     const purchaseDateMismatch = !!vehicle.purchaseDate && vehicle.purchaseDate !== fmt(enteredPurchaseDate);
 
+    // The overall vehicle warranty period (as opposed to the per-part
+    // special periods above) has no single fixed length — different MG
+    // models carry different terms (e.g. a T60 vs. other models), and some
+    // vehicles carry exceptional terms of their own — so it's only ever
+    // known from the explicit start/end dates already on that vehicle's own
+    // sheet record, never computed from a formula. When a correction is
+    // pending (the entered purchase date disagrees with the file) and both
+    // dates are on file, project what the end date would become if that
+    // correction is approved by carrying the SAME span forward onto the
+    // corrected start date, rather than guessing at a duration.
+    let projectedWarrantyEndDate = null;
+    if (purchaseDateMismatch && vehicle.warrantyStartDate && vehicle.warrantyEndDate) {
+      const fileStart = parseDateOnly(vehicle.warrantyStartDate);
+      const fileEnd = parseDateOnly(vehicle.warrantyEndDate);
+      const correctedStart = parseDateOnly(result.warrantyStartDate);
+      if (fileStart && fileEnd && correctedStart && fileEnd.getTime() > fileStart.getTime()) {
+        const durationDays = Math.round((fileEnd.getTime() - fileStart.getTime()) / 86400000);
+        projectedWarrantyEndDate = fmt(addDays(correctedStart, durationDays));
+      }
+    }
+
     res.json({
       vehicle: publicVehicle(vehicle),
       enteredPurchaseDate: fmt(enteredPurchaseDate),
       purchaseDateMismatch,
+      projectedWarrantyEndDate,
       ...result,
     });
   } catch (err) { next(err); }

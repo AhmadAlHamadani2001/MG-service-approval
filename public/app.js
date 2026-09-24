@@ -1789,26 +1789,6 @@ function renderVinBulkPanel() {
 }
 
 function renderVinCheckResult(r) {
-  const mismatch = r.purchaseDateMismatch ? `
-    <div class="rounded-xl border border-amber-300 bg-amber-50 text-amber-800 px-g4 py-g3 mb-g4">
-      <div class="font-semibold text-[13px] mb-1">${t('vin.mismatch_title')}</div>
-      <div class="text-[12.5px] leading-relaxed">${t('vin.mismatch_body')}</div>
-      <div class="text-[12.5px] leading-relaxed mt-2 font-semibold">${t('vin.correction_docs_title')}</div>
-      <div class="text-[12.5px]">${t('vin.correction_docs_body')}</div>
-    </div>` : '';
-
-  // This is only ever an inquiry result, never a stored change — so when the
-  // 1-year-from-ATA rule is what set the warranty start date, the note is
-  // phrased as a projection, not as something that has already happened. If
-  // the entered date also disagrees with the vehicle's file (a correction is
-  // needed), the date only takes effect once that correction is submitted
-  // and approved by the manufacturer.
-  const autoNote = r.warrantyStartAutoTriggered ? `<div class="text-[12px] text-amber-700 mt-1">${
-    r.purchaseDateMismatch
-      ? t('vin.warranty_start_auto_pending_correction', { date: r.warrantyStartDate, ata: r.vehicle.ata })
-      : t('vin.warranty_start_auto', { date: r.warrantyStartDate, ata: r.vehicle.ata })
-  }</div>` : '';
-
   const rows = r.parts.map(p => {
     const extraNotes = [
       p.ataWindowDays ? t('vin.ata_window_note', { n: p.ataWindowDays }) : '',
@@ -1824,29 +1804,55 @@ function renderVinCheckResult(r) {
     </tr>`;
   }).join('');
 
-  // The overall warranty end date is a real value from the vehicle's own
-  // record (the sheet it was imported/entered from), separate from the
-  // per-part special-period coverageEndsAt dates in the table below. When
-  // present we surface it here, plus an auto-filled comment summarizing the
-  // entered purchase date alongside it — the "show it in the comment box"
-  // half of the request, distinct from the "add it as a real column" half
-  // (which lives in the admin vehicle table/edit form).
-  const warrantyEndRow = r.vehicle.warrantyEndDate ? `
-          <div class="text-[12px] text-ink/50 mt-0.5">${t('vin.warranty_end_label')}: <strong>${esc(r.vehicle.warrantyEndDate)}</strong></div>` : '';
-  const commentBoxNote = [
-    t('vin.comment_purchase_line', { date: r.enteredPurchaseDate }),
-    r.vehicle.warrantyEndDate ? t('vin.comment_warranty_end_line', { date: r.vehicle.warrantyEndDate }) : t('vin.comment_warranty_end_missing'),
-  ].join('\n');
+  // Every "please read this" note for the result — a purchase-date mismatch,
+  // the 1-year-from-ATA auto-start rule, and the vehicle's overall warranty
+  // end date (which, unlike the per-part special periods in the table below,
+  // has no fixed length — it comes only from what's on the vehicle's own
+  // sheet record, since the term itself varies by model and sometimes by
+  // exception) — lives in one shared amber notice box, instead of being
+  // split across separate boxes and a standalone comment control.
+  const noteParagraphs = [];
+  if (r.purchaseDateMismatch) {
+    noteParagraphs.push(`
+      <div class="font-semibold text-[13px] mb-1">${t('vin.mismatch_title')}</div>
+      <div class="text-[12.5px] leading-relaxed">${t('vin.mismatch_body')}</div>`);
+  }
+  if (r.warrantyStartAutoTriggered) {
+    // This is only ever an inquiry result, never a stored change — so the
+    // note is phrased as a projection, not as something that has already
+    // happened. If the entered date also disagrees with the vehicle's file
+    // (a correction is needed), it only takes effect once that correction is
+    // submitted and approved by the manufacturer.
+    noteParagraphs.push(`
+      <div class="text-[12.5px] leading-relaxed">${
+        r.purchaseDateMismatch
+          ? t('vin.warranty_start_auto_pending_correction', { date: r.warrantyStartDate, ata: r.vehicle.ata })
+          : t('vin.warranty_start_auto', { date: r.warrantyStartDate, ata: r.vehicle.ata })
+      }</div>`);
+  }
+  noteParagraphs.push(`
+    <div class="text-[12.5px] leading-relaxed">${
+      r.vehicle.warrantyEndDate
+        ? t('vin.warranty_end_on_file', { date: r.vehicle.warrantyEndDate })
+        : t('vin.warranty_end_not_on_file')
+    }</div>`);
+  if (r.projectedWarrantyEndDate) {
+    noteParagraphs.push(`<div class="text-[12.5px] leading-relaxed">${t('vin.warranty_end_projected', { date: r.projectedWarrantyEndDate })}</div>`);
+  }
+  if (r.purchaseDateMismatch) {
+    noteParagraphs.push(`
+      <div class="text-[12.5px] leading-relaxed mt-2 font-semibold">${t('vin.correction_docs_title')}</div>
+      <div class="text-[12.5px]">${t('vin.correction_docs_body')}</div>`);
+  }
+  const notesBox = `<div class="rounded-xl border border-amber-300 bg-amber-50 text-amber-800 px-g4 py-g3 mb-g4">${noteParagraphs.join('')}</div>`;
 
   return `
-    ${mismatch}
+    ${notesBox}
     <div class="card-light rounded-2xl p-g5">
       <div class="flex flex-wrap items-center justify-between gap-2 mb-g4">
         <div>
           <div class="font-display font-semibold text-[15px]">${t('vin.result_title')}</div>
           <div class="text-[12px] text-ink/50 mt-0.5">${t('vin.warranty_start_label')}: <strong>${esc(r.warrantyStartDate)}</strong></div>
-          ${warrantyEndRow}
-          ${autoNote}
         </div>
         <button class="btn btn-primary btn-sm" data-action="print-vin-disclosure">${t('vin.print_disclosure')}</button>
       </div>
@@ -1861,10 +1867,6 @@ function renderVinCheckResult(r) {
         <tbody>${rows}</tbody>
       </table></div>
       <div class="text-[11px] text-ink/40 mt-g3">${t('vin.km_general_note')}</div>
-      <div class="mt-g4">
-        <label class="block text-[11px] font-semibold uppercase tracking-wide text-ink/50 mb-1.5">${t('vin.comment_box_label')}</label>
-        <textarea id="vin-comment-box" rows="2" class="field-input" readonly>${esc(commentBoxNote)}</textarea>
-      </div>
     </div>
   `;
 }
