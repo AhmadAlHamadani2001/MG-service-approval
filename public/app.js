@@ -1366,7 +1366,7 @@ function renderAdmin() {
 }
 
 function renderAdminAccounts() {
-  const roleOptions = ['SALES', 'SALES_MANAGER', 'FINANCE', 'AFTER_SALES_ADMIN', 'AFTERSALES_TEAM']
+  const roleOptions = ['SALES', 'SALES_MANAGER', 'FINANCE', 'AFTER_SALES_ADMIN', 'AFTERSALES_TEAM', 'WARRANTY_CHECK']
     .map(r => `<option value="${r}">${t('role.' + r)}</option>`).join('');
   const branchOptions = state.branches.map(b => `<option value="${b.id}">${esc(b.code)} · ${esc(b.name)}</option>`).join('');
 
