@@ -232,7 +232,22 @@ const VIN_HEADER_CANDIDATES = ['vehicle vin', 'vin', 'system vin'];
 const ATA_HEADER_CANDIDATES = ['ata'];
 const PURCHASE_HEADER_CANDIDATES = ['purchase date', 'purchasedate'];
 const WARRANTY_START_HEADER_CANDIDATES = ['warranty start date', 'warrantystartdate'];
+// This app's own simple template calls the column "Warranty End Date", but a
+// real SAIC/MG dealer export never has a column with that exact name — it
+// instead splits warranty coverage into several date columns: "Stock
+// warranty End Date" (dealer-stock coverage before the vehicle is sold, not
+// customer-facing), "Normal warranty End Date" (the standard MG warranty
+// term — 3yr/120,000km for T60, 6yr/200,000km for most other models, taken
+// straight from the sheet rather than hardcoded), and "Extended warranty
+// End Date" (only populated when the customer bought extended coverage,
+// which pushes the true end date out further than the normal term). Each
+// candidate list below is tried in priority order per row, so a vehicle
+// with an extended-warranty date uses that; otherwise it falls back to the
+// normal term, then finally the stock date if that's genuinely all a row has.
 const WARRANTY_END_HEADER_CANDIDATES = ['warranty end date', 'warrantyenddate'];
+const NORMAL_WARRANTY_END_HEADER_CANDIDATES = ['normal warranty end date'];
+const EXTENDED_WARRANTY_END_HEADER_CANDIDATES = ['extended warranty end date'];
+const STOCK_WARRANTY_END_HEADER_CANDIDATES = ['stock warranty end date'];
 
 function findHeaderColumn(headerMap, candidates) {
   for (const c of candidates) {
@@ -268,6 +283,7 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
 
     let headerMap = null;
     let vinCol = null, ataCol = null, purchaseCol = null, warrantyCol = null, warrantyEndCol = null;
+    let normalWarrantyEndCol = null, extendedWarrantyEndCol = null, stockWarrantyEndCol = null;
     let insertedCount = 0;
     let updatedCount = 0;
     let skippedCount = 0;
@@ -314,6 +330,9 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
         purchaseCol = findHeaderColumn(headerMap, PURCHASE_HEADER_CANDIDATES);
         warrantyCol = findHeaderColumn(headerMap, WARRANTY_START_HEADER_CANDIDATES);
         warrantyEndCol = findHeaderColumn(headerMap, WARRANTY_END_HEADER_CANDIDATES);
+        normalWarrantyEndCol = findHeaderColumn(headerMap, NORMAL_WARRANTY_END_HEADER_CANDIDATES);
+        extendedWarrantyEndCol = findHeaderColumn(headerMap, EXTENDED_WARRANTY_END_HEADER_CANDIDATES);
+        stockWarrantyEndCol = findHeaderColumn(headerMap, STOCK_WARRANTY_END_HEADER_CANDIDATES);
         return;
       }
       if (!vinCol || !ataCol || !purchaseCol) return; // malformed header — reported once after the loop
@@ -323,7 +342,15 @@ router.post('/bulk-import-file', requireRole('AFTER_SALES_ADMIN'), handleVehicle
       const ataDate = parseFlexibleDate(rowValues[ataCol]);
       const purchaseDate = parseFlexibleDate(rowValues[purchaseCol]);
       const warrantyStartDate = warrantyCol ? parseFlexibleDate(rowValues[warrantyCol]) : null;
-      const warrantyEndDate = warrantyEndCol ? parseFlexibleDate(rowValues[warrantyEndCol]) : null;
+      // Priority per row: extended coverage (if the customer bought it) >
+      // the normal MG warranty term > this app's own generic template
+      // column > the dealer-stock date, only as a last resort.
+      const warrantyEndDate =
+        (extendedWarrantyEndCol && parseFlexibleDate(rowValues[extendedWarrantyEndCol])) ||
+        (normalWarrantyEndCol && parseFlexibleDate(rowValues[normalWarrantyEndCol])) ||
+        (warrantyEndCol && parseFlexibleDate(rowValues[warrantyEndCol])) ||
+        (stockWarrantyEndCol && parseFlexibleDate(rowValues[stockWarrantyEndCol])) ||
+        null;
 
       if (!vin || !ataDate || !purchaseDate) {
         skippedCount += 1;

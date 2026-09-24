@@ -1505,6 +1505,18 @@ async function handleVehicleBulkImportFile(file) {
   state.vehicleImportProgress = 0;
   state.vehicleImportSummary = null;
   render();
+  // For a small file the whole upload + server parse can finish in well
+  // under a second, which — without this — makes the progress bar and the
+  // "processing" spinner flash by too fast to actually see. Pinning a small
+  // minimum visible time (measured from when the busy state first rendered)
+  // keeps the feedback perceptible without adding any real delay for a
+  // large, genuinely slow import.
+  const startedAt = Date.now();
+  const MIN_VISIBLE_MS = 400;
+  async function waitMinVisible() {
+    const remaining = MIN_VISIBLE_MS - (Date.now() - startedAt);
+    if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+  }
   try {
     const formData = new FormData();
     formData.append('file', file);
@@ -1513,13 +1525,16 @@ async function handleVehicleBulkImportFile(file) {
       state.vehicleImportProgress = pct;
       render();
     });
+    await waitMinVisible();
     state.vehicleImportSummary = result;
     toast(t('bulk.result_vehicles', { created: result.createdCount, updated: result.updatedCount, skipped: result.skippedCount }), (result.createdCount || result.updatedCount) ? 'success' : 'error');
     state.vehiclesPage = 1;
     state.vehiclesSearch = '';
     state.vehicleImportBusy = false;
+    render();
     await refreshAll();
   } catch (e) {
+    await waitMinVisible();
     state.vehicleImportBusy = false;
     toast(e.message, 'error');
     render();
@@ -1675,6 +1690,14 @@ async function handleVinBulkCheckFile(file) {
   state.vinBulkProgress = 0;
   state.vinBulkResult = null;
   render();
+  // See the matching comment in handleVehicleBulkImportFile — keeps the
+  // progress feedback from flashing by unnoticed on a small/fast file.
+  const startedAt = Date.now();
+  const MIN_VISIBLE_MS = 400;
+  async function waitMinVisible() {
+    const remaining = MIN_VISIBLE_MS - (Date.now() - startedAt);
+    if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+  }
   try {
     const formData = new FormData();
     formData.append('file', file);
@@ -1683,10 +1706,12 @@ async function handleVinBulkCheckFile(file) {
       state.vinBulkProgress = pct;
       render();
     });
+    await waitMinVisible();
     state.vinBulkResult = result;
     state.vinBulkBusy = false;
     render();
   } catch (e) {
+    await waitMinVisible();
     state.vinBulkBusy = false;
     toast(e.message, 'error');
     render();
