@@ -20,7 +20,6 @@ const state = {
   user: null,
   services: [],
   requests: [],
-  demoAccounts: [],
   selectedRequestId: null,
   selectedRequestDetail: null,
   atTab: 'estimation',
@@ -60,6 +59,10 @@ const state = {
   changePasswordOpen: false,
   changePasswordBusy: false,
   changePasswordError: '',
+  showForgotPasswordHint: false,
+  resetPasswordUserId: null,
+  resetPasswordBusy: false,
+  resetPasswordError: '',
 };
 
 // ---------------------------------------------------------------- helpers -
@@ -159,11 +162,6 @@ function apiUpload(path, formData, onProgress) {
 // ------------------------------------------------------------------ boot -
 
 async function boot() {
-  try {
-    const d = await api('/api/auth/demo-accounts');
-    state.demoAccounts = d.accounts;
-  } catch (e) { /* non-fatal */ }
-
   if (!state.token) { render(); return; }
   try {
     const me = await api('/api/auth/me');
@@ -316,9 +314,6 @@ function logout() {
   clearSelection();
   resetDashboardUiState();
   localStorage.removeItem('mg_token');
-  // Otherwise a fresh sign-in could inherit a stale pixel position from the
-  // previous session and animate an unwanted slide on its very first render.
-  Object.keys(tabIndicatorRects).forEach(k => delete tabIndicatorRects[k]);
   render();
 }
 
@@ -385,13 +380,6 @@ function shellHtml(content) {
 
 function loginHtml() {
   const lang = I18N.getLang();
-  const accounts = state.demoAccounts.map(a => `
-    <button class="w-full text-start flex items-center gap-3 px-g3 py-g3 rounded-xl border border-black/[0.07] bg-surface-container-low hover:border-mgred/50 hover:bg-mgred/[0.06] transition-all mb-2" type="button" data-action="demo-login" data-email="${esc(a.email)}" data-password="${esc(a.password)}">
-      <span class="avatar-circle">${esc(initials(a.fullName))}</span>
-      <span class="text-[13px] flex-1 min-w-0">${esc(a.fullName)}<br><span class="text-[11.5px] text-ink/45">${esc(a.email)}</span></span>
-      <span class="text-[10.5px] font-bold uppercase tracking-wide text-mgred-dark shrink-0">${t('role.' + a.role)}</span>
-    </button>
-  `).join('');
   return `
     <div class="min-h-screen flex items-center justify-center p-g4 relative">
       <div class="absolute top-g4 sm:top-g5 end-g4 sm:end-g5">
@@ -410,8 +398,7 @@ function loginHtml() {
             <span class="text-[12px] text-soft">${t('app.tagline')}</span>
           </div>
         </div>
-        <h1 class="font-display text-[20px] font-bold mb-1">${t('login.title')}</h1>
-        <p class="text-[13.5px] text-soft mb-g5">${t('login.subtitle')}</p>
+        <h1 class="font-display text-[20px] font-bold mb-g5">${t('login.title')}</h1>
         ${state.loginError ? `<div class="bg-rose-50 text-rose-700 border border-rose-200 rounded-lg px-3 py-2.5 text-[13px] mb-g4">${esc(state.loginError)}</div>` : ''}
         <form data-action="login-submit" class="space-y-g3">
           <div>
@@ -427,9 +414,9 @@ function loginHtml() {
             <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
           </button>
         </form>
-        <div class="mt-g5 pt-g4 border-t border-black/10">
-          <div class="text-[11px] uppercase tracking-wide text-soft font-semibold mb-g3">${t('login.demo_hint')}</div>
-          <div class="stagger">${accounts}</div>
+        <div class="text-center mt-g4">
+          <button type="button" class="text-[12.5px] font-semibold text-mgred-dark hover:underline" data-action="toggle-forgot-password">${t('login.forgot_password')}</button>
+          ${state.showForgotPasswordHint ? `<div class="text-[12px] text-soft mt-2">${t('login.forgot_password_hint')}</div>` : ''}
         </div>
       </div>
     </div>
@@ -864,55 +851,6 @@ function animateCounts() {
       if (p < 1) requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
-  });
-}
-
-// Sliding pill indicator for .tab-pill-wrap groups (nav sub-tabs). Since
-// render() does a wholesale innerHTML replace on every state change, the DOM
-// node for the indicator is recreated fresh each time — there's no element
-// that persists across renders for the browser to transition on its own. So
-// this keys each tab group's last known pixel position (by its
-// data-tabgroup attribute) in tabIndicatorRects, and applies the classic
-// FLIP technique by hand: place the new indicator at its First (old)
-// position with transitions off, force a reflow, then switch to the Last
-// (new) position with a transition on — which the browser then animates as
-// a slide from the old pill to the new one.
-const tabIndicatorRects = {};
-const TAB_INDICATOR_TRANSITION = 'left .26s cubic-bezier(.4,0,.2,1), width .26s cubic-bezier(.4,0,.2,1)';
-
-function syncTabIndicators() {
-  qa('.tab-pill-wrap[data-tabgroup]').forEach(wrap => {
-    const key = wrap.dataset.tabgroup;
-    const active = wrap.querySelector('.tab-btn.active');
-    if (!active) { delete tabIndicatorRects[key]; return; }
-
-    let indicator = wrap.querySelector('.tab-pill-indicator');
-    if (!indicator) {
-      indicator = document.createElement('div');
-      indicator.className = 'tab-pill-indicator';
-      wrap.insertBefore(indicator, wrap.firstChild);
-    }
-
-    const wrapRect = wrap.getBoundingClientRect();
-    const activeRect = active.getBoundingClientRect();
-    const finalLeft = activeRect.left - wrapRect.left;
-    const finalWidth = activeRect.width;
-    const prev = tabIndicatorRects[key];
-
-    if (prev && (Math.abs(prev.left - finalLeft) > 0.5 || Math.abs(prev.width - finalWidth) > 0.5)) {
-      indicator.style.transition = 'none';
-      indicator.style.left = `${prev.left}px`;
-      indicator.style.width = `${prev.width}px`;
-      // Force a reflow so the "First" position above actually takes effect
-      // before we switch to the animated "Last" position below.
-      void indicator.offsetWidth;
-      indicator.style.transition = TAB_INDICATOR_TRANSITION;
-    } else if (!prev) {
-      indicator.style.transition = 'none';
-    }
-    indicator.style.left = `${finalLeft}px`;
-    indicator.style.width = `${finalWidth}px`;
-    tabIndicatorRects[key] = { left: finalLeft, width: finalWidth };
   });
 }
 
@@ -1378,6 +1316,7 @@ function renderAdminAccounts() {
       <td class="py-2.5 pe-3"><span class="chip ${u.isActive ? 'chip-approved' : 'chip-pending'}">${u.isActive ? t('admin.active') : t('admin.inactive')}</span></td>
       <td class="py-2.5 whitespace-nowrap">
         <button class="text-[11.5px] border border-black/12 rounded-lg px-2.5 py-1 hover:border-mgred hover:text-mgred transition-colors" data-action="toggle-user-active" data-id="${u.id}" data-active="${u.isActive}">${u.isActive ? t('admin.deactivate') : t('admin.reactivate')}</button>
+        <button class="text-[11.5px] border border-black/12 rounded-lg px-2.5 py-1 hover:border-mgred hover:text-mgred transition-colors ms-1.5" data-action="open-reset-password" data-id="${u.id}">${t('admin.reset_password')}</button>
       </td>
     </tr>`).join('');
 
@@ -2180,10 +2119,9 @@ function render() {
     : role === 'FINANCE' ? renderFinance()
     : role === 'AFTERSALES_TEAM' ? renderAftersalesTeam()
     : renderAdmin();
-  app.innerHTML = shellHtml(content) + (state.changePasswordOpen ? changePasswordModalHtml() : '');
+  app.innerHTML = shellHtml(content) + (state.changePasswordOpen ? changePasswordModalHtml() : '') + (state.resetPasswordUserId ? resetPasswordModalHtml() : '');
   wireTotals();
   animateCounts();
-  syncTabIndicators();
 }
 
 function changePasswordModalHtml() {
@@ -2212,6 +2150,37 @@ function changePasswordModalHtml() {
         <div class="flex gap-2 mt-g4">
           <button class="btn btn-primary btn-sm flex-1" data-action="submit-change-password" ${state.changePasswordBusy ? 'disabled' : ''}>${state.changePasswordBusy ? t('common.saving') : t('common.save')}</button>
           <button class="btn btn-ghost-light btn-sm" data-action="close-change-password">${t('common.cancel')}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function resetPasswordModalHtml() {
+  const targetUser = state.users.find(u => u.id === state.resetPasswordUserId);
+  return `
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-g4">
+      <div class="card-light rounded-2xl p-g5 w-full max-w-sm">
+        <div class="flex items-center justify-between mb-g4">
+          <div>
+            <div class="font-display font-semibold text-[16px]">${t('admin.reset_password_title')}</div>
+            ${targetUser ? `<div class="text-[12px] text-ink/50 mt-0.5">${esc(targetUser.fullName)} · ${esc(targetUser.email)}</div>` : ''}
+          </div>
+          <button class="btn btn-ghost-light btn-sm" data-action="close-reset-password">${t('common.close')}</button>
+        </div>
+        <div class="flex flex-col gap-3">
+          <div>
+            <label class="block text-[11px] font-semibold uppercase tracking-wide text-ink/50 mb-1.5">${t('account.new_password')}</label>
+            <input type="password" id="rp-new" dir="ltr" class="field-input" autocomplete="new-password">
+          </div>
+          <div>
+            <label class="block text-[11px] font-semibold uppercase tracking-wide text-ink/50 mb-1.5">${t('account.confirm_password')}</label>
+            <input type="password" id="rp-confirm" dir="ltr" class="field-input" autocomplete="new-password">
+          </div>
+        </div>
+        ${state.resetPasswordError ? `<div class="bg-rose-50 text-rose-700 border border-rose-200 rounded-lg px-3 py-2.5 text-[13px] mt-g3">${esc(state.resetPasswordError)}</div>` : ''}
+        <div class="flex gap-2 mt-g4">
+          <button class="btn btn-primary btn-sm flex-1" data-action="submit-reset-password" ${state.resetPasswordBusy ? 'disabled' : ''}>${state.resetPasswordBusy ? t('common.saving') : t('common.save')}</button>
+          <button class="btn btn-ghost-light btn-sm" data-action="close-reset-password">${t('common.cancel')}</button>
         </div>
       </div>
     </div>`;
@@ -2264,8 +2233,9 @@ async function handleAction(action, el) {
       case 'logout': logout(); return;
       case 'set-lang': I18N.setLang(el.dataset.lang); render(); return;
 
-      case 'demo-login':
-        await login(el.dataset.email, el.dataset.password);
+      case 'toggle-forgot-password':
+        state.showForgotPasswordHint = !state.showForgotPasswordHint;
+        render();
         return;
 
       case 'submit-new-request': {
@@ -2545,6 +2515,56 @@ async function handleAction(action, el) {
         return;
       }
 
+      case 'open-reset-password':
+        state.resetPasswordUserId = id;
+        state.resetPasswordError = '';
+        render();
+        return;
+
+      case 'close-reset-password':
+        state.resetPasswordUserId = null;
+        state.resetPasswordError = '';
+        render();
+        return;
+
+      case 'submit-reset-password': {
+        const newPassword = q('#rp-new')?.value || '';
+        const confirmPassword = q('#rp-confirm')?.value || '';
+        if (!newPassword || !confirmPassword) {
+          state.resetPasswordError = t('account.fields_required');
+          render();
+          return;
+        }
+        if (newPassword.length < 8) {
+          state.resetPasswordError = t('errors.WEAK_PASSWORD');
+          render();
+          return;
+        }
+        if (newPassword !== confirmPassword) {
+          state.resetPasswordError = t('account.password_mismatch');
+          render();
+          return;
+        }
+        state.resetPasswordBusy = true;
+        state.resetPasswordError = '';
+        render();
+        try {
+          await api(`/api/users/${state.resetPasswordUserId}/reset-password`, {
+            method: 'POST',
+            body: JSON.stringify({ newPassword }),
+          });
+          state.resetPasswordBusy = false;
+          state.resetPasswordUserId = null;
+          render();
+          toast(t('toast.password_reset'), 'success');
+        } catch (e) {
+          state.resetPasswordBusy = false;
+          state.resetPasswordError = e.message;
+          render();
+        }
+        return;
+      }
+
       case 'open-new-branch': state.branchFormOpen = true; render(); return;
       case 'cancel-new-branch': state.branchFormOpen = false; render(); return;
 
@@ -2781,19 +2801,6 @@ document.addEventListener('input', (e) => {
       q('#vehicles-search-input')?.focus();
     }, 350);
   }
-});
-
-// A resize can shift .tab-btn widths/positions (e.g. label wrapping at a
-// narrower viewport) without any state change triggering a render() — snap
-// the indicators back into place instantly rather than leaving them
-// misaligned until the next click-driven render.
-let tabIndicatorResizeTimer = null;
-window.addEventListener('resize', () => {
-  clearTimeout(tabIndicatorResizeTimer);
-  tabIndicatorResizeTimer = setTimeout(() => {
-    Object.keys(tabIndicatorRects).forEach(k => delete tabIndicatorRects[k]);
-    syncTabIndicators();
-  }, 120);
 });
 
 boot();

@@ -124,4 +124,24 @@ router.patch('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Admin-initiated password reset for another account. There's no email/SMTP
+// setup in this app, so this — not a self-service "email me a reset link"
+// flow — is what a locked-out user's Aftersales Admin actually uses; the
+// login page's "Forgot password?" hint points them here via the admin.
+router.post('/:id/reset-password', async (req, res, next) => {
+  try {
+    const user = db.users.find(u => u.id === req.params.id);
+    if (!user) throw new ApiError(404, 'Account not found.');
+    const newPassword = String(req.body?.newPassword || '');
+    if (!newPassword || newPassword.length < 8) {
+      throw new ApiError(400, 'Password must be at least 8 characters.', 'WEAK_PASSWORD');
+    }
+    user.passwordHash = bcrypt.hashSync(newPassword, 8);
+    user.updatedAt = new Date().toISOString();
+    logAudit({ entityType: 'USER', entityId: user.id, action: 'RESET_PASSWORD', actor: req.user });
+    await persist();
+    res.json({ user: publicUser(user) });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;
