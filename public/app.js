@@ -1977,11 +1977,38 @@ function buildDisclosureHtml(r) {
         : `تم تحديد تاريخ بدء الضمان بعد عام واحد من تاريخ ATA (${esc(r.vehicle.ata)})، لأن تاريخ الشراء يتجاوز عامًا من تاريخ ATA.`)
     : '';
 
+  // The signed disclosure needs to carry the same warranty-end-date and
+  // purchase-date-mismatch information the on-screen result already shows
+  // (renderVinCheckResult's amber notice box) — otherwise a customer could
+  // sign a copy that's missing the vehicle's actual coverage end date, or a
+  // pending correction, even though the app itself displayed it.
+  const mismatchNoteEn = r.purchaseDateMismatch
+    ? `<p class="notice"><strong>This purchase date differs from what is on file.</strong> The vehicle data on file shows a different purchase date. This result uses the date entered above. If that date is correct, ask the Aftersales Admin to update the vehicle record; otherwise, the vehicle registration card and the MG authorized dealer invoice are needed to correct it.</p>`
+    : '';
+  const mismatchNoteAr = r.purchaseDateMismatch
+    ? `<p class="notice"><strong>تاريخ الشراء هذا يختلف عمّا هو مسجل.</strong> تُظهر بيانات المركبة المسجلة تاريخ شراء مختلفًا. تعتمد هذه النتيجة على التاريخ المُدخل أعلاه. إذا كان هذا التاريخ صحيحًا، فاطلب من مدير ما بعد البيع تحديث سجل المركبة؛ وإلا، فإن استمارة تسجيل المركبة وفاتورة الوكيل المعتمد من MG مطلوبتان للتصحيح.</p>`
+    : '';
+
+  const warrantyEndTextEn = r.vehicle.warrantyEndDate
+    ? `Warranty end date on file: <strong>${esc(r.vehicle.warrantyEndDate)}</strong>. The overall warranty term isn't the same for every model (T60 is 3 years/120,000 km; most other MG models are 6 years/200,000 km; some vehicles carry exceptional terms) — this date reflects this specific vehicle's own record. Confirm the odometer reading at the vehicle, since mileage isn't tracked here.`
+    : `No warranty end date is on file for this vehicle yet — ask the Aftersales Admin to add it.`;
+  const warrantyEndTextAr = r.vehicle.warrantyEndDate
+    ? `تاريخ انتهاء الضمان المسجل: <strong>${esc(r.vehicle.warrantyEndDate)}</strong>. مدة الضمان الإجمالية ليست موحدة لكل الموديلات (T60 مدته 3 سنوات أو 120,000 كم، ومعظم موديلات MG الأخرى 6 سنوات أو 200,000 كم، وبعض المركبات لها مدد استثنائية) — هذا التاريخ يعكس سجل هذه المركبة تحديدًا. يُرجى التأكد من قراءة العداد عند المركبة، لأن هذا النظام لا يسجل قراءة العداد.`
+    : `لا يوجد تاريخ انتهاء ضمان مسجل لهذه المركبة بعد — يُرجى طلب إضافته من مدير ما بعد البيع.`;
+  const projectedEndTextEn = r.projectedWarrantyEndDate
+    ? ` If this purchase-date correction is approved by the manufacturer, the warranty end date will update to <strong>${esc(r.projectedWarrantyEndDate)}</strong>.`
+    : '';
+  const projectedEndTextAr = r.projectedWarrantyEndDate
+    ? ` في حال اعتماد الشركة المصنّعة لتصحيح تاريخ الشراء هذا، سيتحدّث تاريخ انتهاء الضمان إلى <strong>${esc(r.projectedWarrantyEndDate)}</strong>.`
+    : '';
+  const warrantyEndNoteEn = `<p class="notice">${warrantyEndTextEn}${projectedEndTextEn}</p>`;
+  const warrantyEndNoteAr = `<p class="notice">${warrantyEndTextAr}${projectedEndTextAr}</p>`;
+
   const notCoveredRowsEn = notCovered.length
-    ? notCovered.map(p => `<tr><td>${esc(p.label)}</td><td>${esc((p.reasons || []).join(' '))}</td></tr>`).join('')
+    ? notCovered.map(p => `<tr><td>${esc(p.label)}</td><td class="col-reason">${esc((p.reasons || []).join(' '))}</td></tr>`).join('')
     : `<tr><td colspan="2" class="all-covered">All special-period items are currently covered as of ${esc(today)}.</td></tr>`;
   const notCoveredRowsAr = notCovered.length
-    ? notCovered.map(p => `<tr><td>${esc(p.label)}</td><td>${esc((p.reasons || []).join(' '))}</td></tr>`).join('')
+    ? notCovered.map(p => `<tr><td>${esc(p.label)}</td><td class="col-reason">${esc((p.reasons || []).join(' '))}</td></tr>`).join('')
     : `<tr><td colspan="2" class="all-covered">جميع بنود فترة الضمان الخاصة مغطاة حاليًا حتى تاريخ ${esc(today)}.</td></tr>`;
 
   return `<!doctype html>
@@ -2003,7 +2030,8 @@ function buildDisclosureHtml(r) {
   .meta tr:last-child td { border-bottom: none; }
   .meta td.label { color: #666; width: 200px; white-space: nowrap; background: #faf8fe; }
   table.parts { width: 100%; border-collapse: collapse; margin-top: 8px; page-break-inside: auto; }
-  table.parts th, table.parts td { border: 1px solid #ccc; padding: 6px 8px; font-size: 12px; text-align: left; vertical-align: top; }
+  table.parts th, table.parts td { border: 1px solid #ccc; padding: 6px 8px; font-size: 12px; text-align: left; vertical-align: top; white-space: nowrap; }
+  table.parts th.col-reason, table.parts td.col-reason { white-space: normal; }
   table.parts th { background: #f4f3f8; }
   table.parts tr { page-break-inside: avoid; }
   .all-covered { text-align: center; color: #1e8e5a; font-style: italic; }
@@ -2044,15 +2072,18 @@ function buildDisclosureHtml(r) {
       <tr><td class="label">ATA date</td><td>${esc(r.vehicle.ata)}</td></tr>
       <tr><td class="label">Purchase date entered</td><td>${esc(r.enteredPurchaseDate)}</td></tr>
       <tr><td class="label">Warranty start date</td><td><strong>${esc(r.warrantyStartDate)}</strong></td></tr>
+      <tr><td class="label">Warranty end date</td><td><strong>${r.vehicle.warrantyEndDate ? esc(r.vehicle.warrantyEndDate) : 'Not on file'}</strong></td></tr>
     </table>
     ${autoNoteEn ? `<p class="notice">${autoNoteEn}</p>` : ''}
+    ${mismatchNoteEn}
+    ${warrantyEndNoteEn}
 
     <h2>Items not currently covered</h2>
     <table class="parts">
-      <thead><tr><th style="width:32%">Part</th><th>Reason</th></tr></thead>
+      <thead><tr><th style="width:32%">Part</th><th class="col-reason">Reason</th></tr></thead>
       <tbody>${notCoveredRowsEn}</tbody>
     </table>
-    <p class="ack">I, the undersigned customer, acknowledge that the ${esc(DEALER_NAME_EN)} representative has informed me of the warranty start date and the items listed above as not currently covered under the special-period warranty, and that I understand this information.</p>
+    <p class="ack">I, the undersigned customer, acknowledge that the ${esc(DEALER_NAME_EN)} representative has informed me of the warranty start date, the warranty end date, and the items listed above as not currently covered under the special-period warranty, and that I understand this information.</p>
   </div>
 
   <div class="page ar-page ar">
@@ -2067,15 +2098,18 @@ function buildDisclosureHtml(r) {
       <tr><td class="label">تاريخ ATA</td><td>${esc(r.vehicle.ata)}</td></tr>
       <tr><td class="label">تاريخ الشراء المُدخل</td><td>${esc(r.enteredPurchaseDate)}</td></tr>
       <tr><td class="label">تاريخ بدء الضمان</td><td><strong>${esc(r.warrantyStartDate)}</strong></td></tr>
+      <tr><td class="label">تاريخ انتهاء الضمان</td><td><strong>${r.vehicle.warrantyEndDate ? esc(r.vehicle.warrantyEndDate) : 'غير مسجل'}</strong></td></tr>
     </table>
     ${autoNoteAr ? `<p class="notice">${autoNoteAr}</p>` : ''}
+    ${mismatchNoteAr}
+    ${warrantyEndNoteAr}
 
     <h2>البنود غير المغطاة حاليًا</h2>
     <table class="parts">
-      <thead><tr><th style="width:32%">القطعة</th><th>السبب</th></tr></thead>
+      <thead><tr><th style="width:32%">القطعة</th><th class="col-reason">السبب</th></tr></thead>
       <tbody>${notCoveredRowsAr}</tbody>
     </table>
-    <p class="ack">أقرّ أنا الموقّع أدناه، بصفتي العميل، بأن ممثل ${esc(DEALER_NAME_AR)} قد أبلغني بتاريخ بدء الضمان وبالبنود المذكورة أعلاه كغير مغطاة حاليًا بموجب ضمان الفترة الخاصة، وبأنني على علم ودراية بهذه المعلومات.</p>
+    <p class="ack">أقرّ أنا الموقّع أدناه، بصفتي العميل، بأن ممثل ${esc(DEALER_NAME_AR)} قد أبلغني بتاريخ بدء الضمان وتاريخ انتهاء الضمان وبالبنود المذكورة أعلاه كغير مغطاة حاليًا بموجب ضمان الفترة الخاصة، وبأنني على علم ودراية بهذه المعلومات.</p>
 
     <div class="sig-section">
       <h2>Signatures / التوقيعات</h2>
