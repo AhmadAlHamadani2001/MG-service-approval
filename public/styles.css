@@ -161,15 +161,32 @@ body::after {
 .scrollbox { overflow-x: auto; border-radius: 12px; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 560px; }
 
-/* Segmented pill tabs. The active tab's background is a plain CSS state on
-   .tab-btn.active itself — no separate animated indicator element. An
-   earlier version slid a shared pill between buttons on every render, but
-   since render() fully replaces the DOM on each click, that animation could
-   flash/jump rather than read as a clean transition, so it was removed in
-   favor of this simpler, flicker-free static highlight. */
+/* Segmented pill tabs. The active tab's highlight is a single shared
+   ".tab-pill-indicator" element that slides between buttons, positioned by
+   JS (see syncTabIndicators() in app.js) rather than by CSS alone — because
+   render() fully replaces this markup on every click, a fresh indicator
+   node exists after each redraw with no DOM continuity to transition from.
+   syncTabIndicators() works around that: it snaps the new node to the
+   *previous* position instantly (transition: none), forces a reflow, then
+   sets it to the current position with the transition back on — a manual
+   "FLIP" that makes the slide read as continuous motion even though the
+   element behind it is technically new every time. Because it only ever
+   moves a small decorative pill (never fades whole panels or lists), it's
+   safe to re-run on every render(), including ones a tab click didn't
+   cause — the indicator just "moves" zero pixels and nothing is visible. */
 .tab-pill-wrap { position: relative; display: inline-flex; align-items: center; padding: 4px; background: var(--surface-container, #EEEDF3); border-radius: 999px; gap: 2px; }
-.tab-btn { position: relative; padding: 8px 16px; font-size: 13px; font-weight: 600; border-radius: 999px; cursor: pointer; background: none; border: none; color: var(--ink-soft); transition: color .15s ease; }
-.tab-btn.active { color: var(--mg-red-dark); background: var(--paper-2); box-shadow: 0 1px 2px rgba(20,21,26,0.06), 0 4px 10px -4px rgba(20,21,26,0.12); }
+.tab-pill-indicator {
+  position: absolute; top: 4px; bottom: 4px; left: 0; width: 0;
+  border-radius: 999px; background: var(--paper-2);
+  box-shadow: 0 1px 2px rgba(20,21,26,0.06), 0 4px 10px -4px rgba(20,21,26,0.12);
+  transition: transform .28s cubic-bezier(.2,.8,.3,1), width .28s cubic-bezier(.2,.8,.3,1);
+  pointer-events: none; z-index: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tab-pill-indicator { transition: none !important; }
+}
+.tab-btn { position: relative; z-index: 1; padding: 8px 16px; font-size: 13px; font-weight: 600; border-radius: 999px; cursor: pointer; background: none; border: none; color: var(--ink-soft); transition: color .15s ease; }
+.tab-btn.active { color: var(--mg-red-dark); }
 
 /* Toasts */
 .toast { padding: 12px 16px; border-radius: 12px; font-size: 13px; color: #fff; box-shadow: 0 16px 32px -16px rgba(0,0,0,0.5); animation: toastIn .28s cubic-bezier(.2,.8,.3,1) both; }
@@ -179,15 +196,20 @@ table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 560p
 .toast-success { background: #1e8e5a; }
 
 /* ---------- Motion --------------------------------------------------------
-   Entrance animation is now reserved for panels that genuinely appear once
-   (the login card, toasts) — not for anything reached by render()'s normal
-   redraws. An earlier version also faded in the main content area and
-   staggered list rows on every redraw, but since render() replaces #app's
-   markup wholesale on every state change (no diffing), that meant even a
-   plain tab click replayed a fade-from-transparent across the whole screen
-   — read by users as a "blink" rather than a transition. Removed in favor
-   of an instant, flicker-free redraw for that content (same reasoning as
-   the tab-pill indicator removal above). */
+   ".animate-in-pop" (below) is for a box that genuinely appears/disappears
+   — the login card, a modal dialog, an inline "add X" form/panel toggled
+   open by its own button. Those are safe to animate on every render()
+   because they only exist in the markup while open, and while open they're
+   redrawn rarely (an error message, a save-in-progress state) rather than
+   continuously.
+   It is NOT used on the main content area or on list/row containers: those
+   get redrawn on every click anywhere in the app (not just when they
+   themselves change), so a fade-from-transparent there replayed constantly
+   and read as a screen-wide "blink" rather than a transition — removed in
+   favor of an instant redraw. For the same reason, don't add it to a panel
+   that redraws itself repeatedly while open (e.g. a file-upload panel that
+   re-renders per progress tick) — gate it in app.js on the panel's own
+   "busy" flag so it plays once on open/settle, not on every tick. */
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -206,6 +228,12 @@ table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 560p
 }
 
 .animate-in-pop { animation: popIn .32s cubic-bezier(.2,.8,.3,1) both; }
+/* Modal backdrops fade in behind the card that pops in with .animate-in-pop
+   — same "genuinely appears once" reasoning as above. */
+.fade-in { animation: fadeIn .22s ease both; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-in-pop, .fade-in { animation: none !important; }
+}
 
 @media (max-width: 1024px) {
   .lg-grid-2 { grid-template-columns: 1fr !important; }

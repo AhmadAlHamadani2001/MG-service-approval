@@ -314,6 +314,9 @@ function logout() {
   clearSelection();
   resetDashboardUiState();
   localStorage.removeItem('mg_token');
+  // Drop remembered tab-indicator positions so a different account logging
+  // in next doesn't inherit a stale "slide from" position on its first paint.
+  Object.keys(tabIndicatorRects).forEach(k => delete tabIndicatorRects[k]);
   render();
 }
 
@@ -584,6 +587,7 @@ function caseSectionsHtml(list, { needsActionFilter, needsActionLabel, activeTab
 
   const tabBar = `
     <div class="tab-pill-wrap mb-g3" data-tabgroup="${esc(tabChangeAction)}">
+      <span class="tab-pill-indicator"></span>
       ${tabs.map(tb => `<button type="button" class="tab-btn ${effective === tb.key ? 'active' : ''}" data-action="${tabChangeAction}" data-subtab="${tb.key}">${esc(tb.label)} (${tb.items.length})</button>`).join('')}
     </div>`;
 
@@ -624,6 +628,7 @@ function renderSales() {
 
   const tabsBar = `
     <div class="tab-pill-wrap mb-g4" data-tabgroup="sales-tabs">
+      <span class="tab-pill-indicator"></span>
       <button class="tab-btn ${state.salesTab !== 'my' ? 'active' : ''}" data-action="sales-tab" data-tab="new">${t('sales.tab_new')}</button>
       <button class="tab-btn ${state.salesTab === 'my' ? 'active' : ''}" data-action="sales-tab" data-tab="my">${t('sales.tab_my', { n: branchRequests.length })}</button>
     </div>
@@ -941,7 +946,7 @@ function renderAftersalesTeam() {
     : renderActiveCasesTab(myEstimates, activeServices);
 
   const walkinPanel = state.walkinFormOpen ? `
-    <div class="glass glow-border rounded-xl2 p-g5">
+    <div class="glass glow-border rounded-xl2 p-g5 animate-in-pop">
       <div class="flex items-center justify-between mb-g4">
         ${panelOpen(t('at.walkin_title'), t('at.walkin_sub'))}
         <button class="btn btn-ghost btn-sm shrink-0" data-action="cancel-walkin-form">${t('common.cancel')}</button>
@@ -968,6 +973,7 @@ function renderAftersalesTeam() {
   return `
     ${walkinPanel}
     <div class="tab-pill-wrap mb-g4 mt-g5" data-tabgroup="at-tabs">
+      <span class="tab-pill-indicator"></span>
       <button class="tab-btn ${state.atTab === 'estimation' ? 'active' : ''}" data-action="at-tab" data-tab="estimation">${t('at.tab_estimation')} · ${state.requests.filter(r => r.status === 'UNDER_AFTER_SALES_ESTIMATION').length}</button>
       <button class="tab-btn ${state.atTab === 'execution' ? 'active' : ''}" data-action="at-tab" data-tab="execution">${t('at.tab_execution')} · ${state.requests.filter(r => r.status === 'APPROVED_IN_AFTER_SALES').length}</button>
       <button class="tab-btn ${state.atTab === 'active' ? 'active' : ''}" data-action="at-tab" data-tab="active">${t('at.tab_active')} · ${myEstimates.length}</button>
@@ -1234,7 +1240,7 @@ function renderAdminCatalog() {
   }).join('');
 
   const addForm = state.catalogFormOpen ? `
-    <div class="card-light rounded-2xl p-g4 mb-g4">
+    <div class="card-light rounded-2xl p-g4 mb-g4 animate-in-pop">
       <div class="flex flex-wrap gap-2 items-end">
         <div class="w-28"><label class="block text-[11px] text-ink/50 mb-1">${t('admin.code')}</label><input type="text" id="new-code" placeholder="SVC-0600" class="field-input-light"></div>
         <div class="flex-1 min-w-[180px]"><label class="block text-[11px] text-ink/50 mb-1">${t('admin.description')}</label><input type="text" id="new-desc" class="field-input-light"></div>
@@ -1253,7 +1259,7 @@ function renderAdminCatalog() {
     </div>` : '';
 
   const bulkPanel = state.bulkImportOpen ? `
-    <div class="card-light rounded-2xl p-g4 mb-g4">
+    <div class="card-light rounded-2xl p-g4 mb-g4 animate-in-pop">
       <div class="text-[13px] font-semibold mb-1">${t('admin.bulk_title')}</div>
       <div class="text-[12px] text-ink/50 mb-g3">${t('admin.bulk_sub')}</div>
       <div class="flex flex-wrap gap-2 items-center">
@@ -1293,6 +1299,7 @@ function renderAdminCatalog() {
 function renderAdmin() {
   const tabBar = `
     <div class="tab-pill-wrap mb-g4" data-tabgroup="admin-tabs">
+      <span class="tab-pill-indicator"></span>
       <button class="tab-btn ${state.adminTab === 'catalog' ? 'active' : ''}" data-action="admin-tab" data-tab="catalog">${t('admin.tab_catalog')}</button>
       <button class="tab-btn ${state.adminTab === 'accounts' ? 'active' : ''}" data-action="admin-tab" data-tab="accounts">${t('admin.tab_accounts')} · ${state.users.length}</button>
       <button class="tab-btn ${state.adminTab === 'branches' ? 'active' : ''}" data-action="admin-tab" data-tab="branches">${t('admin.tab_branches')} · ${state.branches.length}</button>
@@ -1323,7 +1330,7 @@ function renderAdminAccounts() {
     </tr>`).join('');
 
   const form = state.accountFormOpen ? `
-    <div class="card-light rounded-2xl p-g4 mb-g4">
+    <div class="card-light rounded-2xl p-g4 mb-g4 animate-in-pop">
       <div class="flex flex-wrap gap-2 items-end">
         <div class="flex-1 min-w-[160px]"><label class="block text-[11px] text-ink/50 mb-1">${t('admin.full_name')}</label><input type="text" id="new-acc-name" class="field-input-light"></div>
         <div class="flex-1 min-w-[190px]"><label class="block text-[11px] text-ink/50 mb-1">${t('login.email')}</label><input type="email" id="new-acc-email" dir="ltr" class="field-input-light"></div>
@@ -1369,7 +1376,7 @@ function renderAdminBranches() {
     </tr>`).join('');
 
   const form = state.branchFormOpen ? `
-    <div class="card-light rounded-2xl p-g4 mb-g4">
+    <div class="card-light rounded-2xl p-g4 mb-g4 animate-in-pop">
       <div class="flex flex-wrap gap-2 items-end">
         <div class="w-32"><label class="block text-[11px] text-ink/50 mb-1">${t('admin.branch_code')}</label><input type="text" id="new-branch-code" dir="ltr" class="field-input-light"></div>
         <div class="flex-1 min-w-[220px]"><label class="block text-[11px] text-ink/50 mb-1">${t('admin.branch_name')}</label><input type="text" id="new-branch-name" class="field-input-light"></div>
@@ -1535,7 +1542,7 @@ function renderAdminVehicles() {
   }).join('');
 
   const addForm = state.vehicleFormOpen ? `
-    <div class="card-light rounded-2xl p-g4 mb-g4">
+    <div class="card-light rounded-2xl p-g4 mb-g4 animate-in-pop">
       <div class="flex flex-wrap gap-2 items-end">
         <div class="w-44"><label class="block text-[11px] text-ink/50 mb-1">${t('common.vin')}</label><input type="text" id="new-vehicle-vin" dir="ltr" class="field-input-light"></div>
         <div class="w-40"><label class="block text-[11px] text-ink/50 mb-1">${t('admin.ata')}</label><input type="date" id="new-vehicle-ata" dir="ltr" class="field-input-light"></div>
@@ -1549,7 +1556,7 @@ function renderAdminVehicles() {
     </div>` : '';
 
   const bulkPanel = state.vehicleBulkImportOpen ? `
-    <div class="card-light rounded-2xl p-g4 mb-g4">
+    <div class="card-light rounded-2xl p-g4 mb-g4${state.vehicleImportBusy ? '' : ' animate-in-pop'}">
       <div class="text-[13px] font-semibold mb-1">${t('admin.vehicle_bulk_title')}</div>
       <div class="text-[12px] text-ink/50 mb-g3">${t('admin.vehicle_bulk_sub')}</div>
       <div class="flex flex-wrap gap-2 items-center">
@@ -1797,7 +1804,7 @@ function renderVinCheck() {
 function renderVinBulkPanel() {
   if (!state.vinBulkOpen) return '';
   return `
-    <div class="card-light rounded-2xl p-g4 mb-g4">
+    <div class="card-light rounded-2xl p-g4 mb-g4${state.vinBulkBusy ? '' : ' animate-in-pop'}">
       <div class="text-[13px] font-semibold mb-1">${t('vin.bulk_title')}</div>
       <div class="text-[12px] text-ink/50 mb-g3">${t('vin.bulk_sub', { max: 2000 })}</div>
       <div class="flex flex-wrap gap-2 items-center">
@@ -2104,6 +2111,45 @@ function printDisclosure() {
   win.onload = () => { try { win.print(); } catch (e) { /* user can still use the on-page Print button */ } };
 }
 
+// Remembers each tab-pill-wrap's indicator position (by its data-tabgroup
+// name) across renders — see syncTabIndicators() and the CSS comment above
+// .tab-pill-indicator in styles.css for why this is what makes the pill
+// slide even though render() recreates the DOM every time.
+const tabIndicatorRects = {};
+
+function syncTabIndicators() {
+  qa('.tab-pill-wrap[data-tabgroup]').forEach(wrap => {
+    const key = wrap.dataset.tabgroup;
+    const indicator = wrap.querySelector('.tab-pill-indicator');
+    const active = wrap.querySelector('.tab-btn.active');
+    if (!indicator || !active) return;
+    // offsetLeft is already relative to offsetParent, and the active
+    // button's offsetParent is this wrap (wrap is position:relative and the
+    // button is a direct child) — the same origin the absolutely-positioned
+    // indicator's own left:0 uses, so no further subtraction is needed.
+    const left = active.offsetLeft;
+    const width = active.offsetWidth;
+    const prev = tabIndicatorRects[key];
+    if (prev) {
+      // FLIP: snap to the last known position with no transition, force a
+      // reflow so the browser commits that as the "from" state, then turn
+      // the transition back on and set the real target — the pill visibly
+      // slides from where it was to where it is now.
+      indicator.style.transition = 'none';
+      indicator.style.transform = `translateX(${prev.left}px)`;
+      indicator.style.width = `${prev.width}px`;
+      // eslint-disable-next-line no-unused-expressions
+      indicator.offsetWidth; // force layout before re-enabling the transition
+      indicator.style.transition = '';
+    } else {
+      indicator.style.transition = 'none';
+    }
+    indicator.style.transform = `translateX(${left}px)`;
+    indicator.style.width = `${width}px`;
+    tabIndicatorRects[key] = { left, width };
+  });
+}
+
 // ---------------------------------------------------------------- render -
 
 function render() {
@@ -2125,12 +2171,13 @@ function render() {
   app.innerHTML = shellHtml(content) + (state.changePasswordOpen ? changePasswordModalHtml() : '') + (state.resetPasswordUserId ? resetPasswordModalHtml() : '');
   wireTotals();
   animateCounts();
+  syncTabIndicators();
 }
 
 function changePasswordModalHtml() {
   return `
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-g4">
-      <div class="card-light rounded-2xl p-g5 w-full max-w-sm">
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-g4 fade-in">
+      <div class="card-light rounded-2xl p-g5 w-full max-w-sm animate-in-pop">
         <div class="flex items-center justify-between mb-g4">
           <div class="font-display font-semibold text-[16px]">${t('account.change_password')}</div>
           <button class="btn btn-ghost-light btn-sm" data-action="close-change-password">${t('common.close')}</button>
@@ -2161,8 +2208,8 @@ function changePasswordModalHtml() {
 function resetPasswordModalHtml() {
   const targetUser = state.users.find(u => u.id === state.resetPasswordUserId);
   return `
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-g4">
-      <div class="card-light rounded-2xl p-g5 w-full max-w-sm">
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-g4 fade-in">
+      <div class="card-light rounded-2xl p-g5 w-full max-w-sm animate-in-pop">
         <div class="flex items-center justify-between mb-g4">
           <div>
             <div class="font-display font-semibold text-[16px]">${t('admin.reset_password_title')}</div>
@@ -2804,6 +2851,21 @@ document.addEventListener('input', (e) => {
       q('#vehicles-search-input')?.focus();
     }, 350);
   }
+});
+
+// A window resize can change where a tab button ends up (wrapping, sidebar
+// width, etc.) without a render() happening — resync the indicators so they
+// don't stay stuck at a now-wrong position. Debounced since resize fires
+// continuously while dragging, and the reset-then-resync (rather than just
+// calling syncTabIndicators() directly) makes it a snap, not a slide: a
+// window resize isn't a tab switch, so it shouldn't look like one.
+let tabIndicatorResizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(tabIndicatorResizeTimer);
+  tabIndicatorResizeTimer = setTimeout(() => {
+    Object.keys(tabIndicatorRects).forEach(k => delete tabIndicatorRects[k]);
+    syncTabIndicators();
+  }, 120);
 });
 
 boot();
