@@ -88,6 +88,21 @@ function statusChip(status) {
 function q(sel) { return document.querySelector(sel); }
 function qa(sel) { return Array.from(document.querySelectorAll(sel)); }
 
+// Draws the eye from a clicked request row to the detail panel that just
+// appeared for it — clicking a *different* request is treated as a fresh
+// "look here" moment (the panel's wrapper gets .animate-in-pop, a quick
+// zoom-in), but re-rendering the SAME selected request's detail (which
+// happens constantly while editing its items, adding a comment, etc.)
+// deliberately does not replay the animation — same reasoning as the
+// upload-progress panels: only genuinely new content pops, not every
+// redraw of content already on screen.
+let lastDetailRequestId = null;
+function detailBoxClass(currentId) {
+  const prev = lastDetailRequestId;
+  lastDetailRequestId = currentId || null;
+  return (currentId && currentId !== prev) ? ' animate-in-pop' : '';
+}
+
 // Every submit/resubmit action can land at either PENDING_SALES_APPROVAL or
 // PENDING_FINANCE_APPROVAL depending on the request's history (see the
 // server-side destination logic in requests.js) — so the confirmation toast
@@ -531,32 +546,38 @@ const HISTORY_STATUSES = ['CLOSED', 'REJECTED'];
 // where a case in front of them might be a regular Sales request or one
 // they created themselves as a walk-in.
 function originNote(r) {
-  return `<span class="text-[9.5px] font-semibold uppercase tracking-wide text-ink/40 shrink-0">${r.origin === 'WALK_IN' ? t('at.created_by_aftersales') : t('at.created_by_sales')}</span>`;
+  return `<span class="text-[9.5px] font-bold uppercase tracking-wide text-ink/40 shrink-0">${r.origin === 'WALK_IN' ? t('at.created_by_aftersales') : t('at.created_by_sales')}</span>`;
 }
 
 // A small "submitted by X" tag — relevant wherever a case list now spans a
 // whole branch team rather than just one person's own submissions, so it's
 // clear at a glance whose request each row is.
 function submitterNote(r) {
-  return `<span class="text-[9.5px] font-semibold uppercase tracking-wide text-ink/40 shrink-0">${t('common.by')} ${esc(r.submittedBy ? r.submittedBy.fullName : '')}</span>`;
+  return `<span class="text-[9.5px] font-bold uppercase tracking-wide text-ink/40 shrink-0">${t('common.by')} ${esc(r.submittedBy ? r.submittedBy.fullName : '')}</span>`;
 }
 
-// One row in a shared case list ("Branch Requests", "Active Cases").
-// leadWithVin matches the VIN-first convention used elsewhere on the
-// Aftersales Team page. showOrigin adds the "Created by: Sales/Aftersales"
-// note, relevant only where a list can mix both origins. showSubmitter adds
-// the "by <name>" tag, relevant only where a list can mix multiple people's
-// submissions (a branch-wide list rather than one person's own).
+// One row in a shared case list ("Branch Requests", "Active Cases"). Model,
+// VIN, total price, "created by", branch, and status are all bold/prominent
+// here — this row is a label the user scans and clicks, not prose, so the
+// facts that actually distinguish one request from the next should read at
+// a glance. leadWithVin matches the VIN-first convention used elsewhere on
+// the Aftersales Team page (VIN still gets its own bold styling either way,
+// only its left-to-right position with the request number changes).
+// showOrigin adds the "Created by: Sales/Aftersales" note, relevant only
+// where a list can mix both origins. showSubmitter adds the "by <name>"
+// tag, relevant only where a list can mix multiple people's submissions (a
+// branch-wide list rather than one person's own).
 function caseRow(r, { leadWithVin = false, showOrigin = false, showSubmitter = false } = {}) {
-  const lead = leadWithVin ? r.vin : r.requestNumber;
-  const trail = leadWithVin ? r.requestNumber : r.vin;
+  const vinSpan = `<span class="font-mono text-[12.5px] font-bold w-32 shrink-0 truncate">${esc(r.vin)}</span>`;
+  const reqSpan = `<span class="font-mono text-[11px] text-soft w-24 shrink-0 truncate">${esc(r.requestNumber)}</span>`;
   return `
-    <div class="flex items-center gap-3 p-3 rounded-xl border flex-wrap ${r.id === state.selectedRequestId ? 'border-mgred bg-mgred/10' : 'border-black/10 bg-black/[0.02] hover:border-black/20'} cursor-pointer transition-all hover:-translate-y-0.5" data-action="select-request" data-id="${r.id}" data-search="${esc((r.vin + ' ' + r.requestNumber).toLowerCase())}">
-      <span class="font-mono ${leadWithVin ? 'text-[12.5px] font-semibold' : 'text-[12px]'} w-32 shrink-0 truncate">${esc(lead)}</span>
-      <span class="font-mono text-[11px] text-soft w-24 shrink-0 truncate">${esc(trail)}</span>
-      <span class="text-[12px] text-soft flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')}</span>
+    <div class="flex items-center gap-3 p-3 rounded-xl border flex-wrap ${r.id === state.selectedRequestId ? 'border-mgred bg-mgred/10 scale-[0.97]' : 'border-black/10 bg-black/[0.02] hover:border-black/20'} cursor-pointer transition-all hover:-translate-y-0.5" data-action="select-request" data-id="${r.id}" data-search="${esc((r.vin + ' ' + r.requestNumber).toLowerCase())}">
+      ${leadWithVin ? vinSpan + reqSpan : reqSpan + vinSpan}
+      <span class="text-[12px] font-bold flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')}</span>
       ${showSubmitter ? submitterNote(r) : ''}
       ${showOrigin ? originNote(r) : ''}
+      ${r.branch ? `<span class="text-[9.5px] font-bold uppercase tracking-wide text-ink/40 shrink-0 font-mono">${esc(r.branch.code)}</span>` : ''}
+      <span class="text-[12px] font-bold tabular-nums shrink-0">${money(r.totalPrice)}</span>
       ${statusChip(r.status)}
     </div>`;
 }
@@ -625,6 +646,7 @@ function renderSales() {
   } else if (sel && branchRequests.some(r => r.id === sel.id)) {
     detailPanel = renderReadOnlyDetail(sel);
   }
+  const detailCls = detailBoxClass(sel ? sel.id : null);
 
   const tabsBar = `
     <div class="tab-pill-wrap mb-g4" data-tabgroup="sales-tabs">
@@ -635,16 +657,17 @@ function renderSales() {
   `;
 
   return tabsBar + (state.salesTab === 'my'
-    ? renderSalesMyRequestsTab(branchRequests, detailPanel)
-    : renderSalesNewRequestTab(catalogRows, pendingWithMe, detailPanel));
+    ? renderSalesMyRequestsTab(branchRequests, detailPanel, detailCls)
+    : renderSalesNewRequestTab(catalogRows, pendingWithMe, detailPanel, detailCls));
 }
 
-function renderSalesNewRequestTab(catalogRows, pendingWithMe, detailPanel) {
+function renderSalesNewRequestTab(catalogRows, pendingWithMe, detailPanel, detailCls) {
   const pendingRows = pendingWithMe.length ? pendingWithMe.map(r => `
-    <div class="flex items-center gap-3 p-3 rounded-xl border flex-wrap ${r.id === state.selectedRequestId ? 'border-mgred bg-mgred/10' : 'border-black/10 bg-black/[0.02] hover:border-black/20'} cursor-pointer transition-all hover:-translate-y-0.5" data-action="select-request" data-id="${r.id}">
+    <div class="flex items-center gap-3 p-3 rounded-xl border flex-wrap ${r.id === state.selectedRequestId ? 'border-mgred bg-mgred/10 scale-[0.97]' : 'border-black/10 bg-black/[0.02] hover:border-black/20'} cursor-pointer transition-all hover:-translate-y-0.5" data-action="select-request" data-id="${r.id}">
       <span class="font-mono text-[12px] w-32 shrink-0">${esc(r.requestNumber)}</span>
-      <span class="font-mono text-[11px] text-soft w-24 shrink-0 truncate">${esc(r.vin)}</span>
-      <span class="text-[12px] text-soft flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')}</span>
+      <span class="font-mono text-[11px] font-bold w-24 shrink-0 truncate">${esc(r.vin)}</span>
+      <span class="text-[12px] font-bold flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')}</span>
+      <span class="text-[12px] font-bold tabular-nums shrink-0">${money(r.totalPrice)}</span>
       ${statusChip(r.status)}
     </div>
   `).join('') : `<div class="text-center text-soft text-[13px] py-g5">${t('sales.no_pending')}</div>`;
@@ -671,7 +694,7 @@ function renderSalesNewRequestTab(catalogRows, pendingWithMe, detailPanel) {
           ${panelOpen(t('sales.pending_title'), t('sales.pending_sub'))}
           <div class="space-y-2">${pendingRows}</div>
         </div>
-        ${detailPanel}
+        <div class="${detailCls}">${detailPanel}</div>
       </div>
     </div>
   `;
@@ -681,7 +704,7 @@ function renderSalesNewRequestTab(catalogRows, pendingWithMe, detailPanel) {
 // own submissions (see renderSales()) — so "needs your action" has to check
 // ownership too, not just status, or a teammate's returned request would
 // show up in a bucket this viewer can't actually act on.
-function renderSalesMyRequestsTab(branchRequests, detailPanel) {
+function renderSalesMyRequestsTab(branchRequests, detailPanel, detailCls) {
   const listHtml = caseSectionsHtml(branchRequests, {
     needsActionFilter: r => r.status === 'RETURNED_TO_SALES' && r.submittedBy && r.submittedBy.id === state.user.id,
     needsActionLabel: t('common.needs_your_action'),
@@ -698,7 +721,7 @@ function renderSalesMyRequestsTab(branchRequests, detailPanel) {
         <input type="text" id="my-requests-search" data-search-target="my-requests-list" class="field-input mb-g3" placeholder="${t('sales.search_vin_placeholder')}">
         <div id="my-requests-list">${listHtml}</div>
       </div>
-      <div>${detailPanel || `<div class="glass glow-border rounded-xl2 p-g5"><div class="text-center text-soft text-[13px] py-g6">${t('sales.select_hint')}</div></div>`}</div>
+      <div class="${detailCls}">${detailPanel || `<div class="glass glow-border rounded-xl2 p-g5"><div class="text-center text-soft text-[13px] py-g6">${t('sales.select_hint')}</div></div>`}</div>
     </div>
   `;
 }
@@ -758,14 +781,15 @@ function renderSalesManager() {
     : pending;
 
   const rows = listSource.length ? listSource.map(r => `
-    <div class="flex items-center gap-3 p-3 rounded-xl border flex-wrap ${r.id === state.selectedRequestId ? 'border-mgred bg-mgred/10' : 'border-black/10 bg-black/[0.02] hover:border-black/20'} cursor-pointer transition-all hover:-translate-y-0.5" data-action="select-request" data-id="${r.id}">
+    <div class="flex items-center gap-3 p-3 rounded-xl border flex-wrap ${r.id === state.selectedRequestId ? 'border-mgred bg-mgred/10 scale-[0.97]' : 'border-black/10 bg-black/[0.02] hover:border-black/20'} cursor-pointer transition-all hover:-translate-y-0.5" data-action="select-request" data-id="${r.id}">
       <span class="font-mono text-[12px] w-32 shrink-0">${esc(r.requestNumber)}</span>
-      <span class="font-mono text-[11px] text-soft w-24 shrink-0 truncate">${esc(r.vin)}</span>
-      <span class="text-[12px] text-soft flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')} · ${esc(r.submittedBy ? r.submittedBy.fullName : '')}</span>
+      <span class="font-mono text-[11px] font-bold w-24 shrink-0 truncate">${esc(r.vin)}</span>
+      <span class="text-[12px] font-bold flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')}</span>
+      ${submitterNote(r)}
       ${isReviewing ? statusChip(r.status) : ''}
-      ${r.branch ? `<span class="text-[9.5px] font-semibold uppercase tracking-wide text-ink/40 shrink-0 font-mono">${esc(r.branch.code)}</span>` : ''}
+      ${r.branch ? `<span class="text-[9.5px] font-bold uppercase tracking-wide text-ink/40 shrink-0 font-mono">${esc(r.branch.code)}</span>` : ''}
       <span class="text-[10px] font-bold uppercase tracking-wide ${r.origin === 'WALK_IN' ? 'text-amber-300' : 'text-ink/40'} shrink-0">${r.origin === 'WALK_IN' ? t('finance.origin_walkin') : ''}</span>
-      <span class="text-[12.5px] font-semibold tabular-nums shrink-0">${money(r.totalPrice)}</span>
+      <span class="text-[12.5px] font-bold tabular-nums shrink-0">${money(r.totalPrice)}</span>
     </div>
   `).join('') : `<div class="text-center text-soft text-[13px] py-g6">${t('finance.empty_queue')}</div>`;
 
@@ -775,6 +799,7 @@ function renderSalesManager() {
     : sel && listSource.some(r => r.id === sel.id)
       ? renderReadOnlyDetail(sel)
       : `<div class="glass glow-border rounded-xl2 p-g5"><div class="text-center text-soft text-[13px] py-g6">${t('finance.select_hint')}</div></div>`;
+  const detailCls = detailBoxClass(sel ? sel.id : null);
 
   return `
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-g5">
@@ -789,7 +814,7 @@ function renderSalesManager() {
         ${isReviewing ? `<button class="btn btn-ghost btn-sm mb-g3" data-action="stat-filter" data-key="pending">${t('common.back_to_queue')}</button>` : ''}
         <div class="space-y-2">${rows}</div>
       </div>
-      <div>${detail}</div>
+      <div class="${detailCls}">${detail}</div>
     </div>
   `;
 }
@@ -873,14 +898,15 @@ function renderFinance() {
     : pending;
 
   const rows = listSource.length ? listSource.map(r => `
-    <div class="flex items-center gap-3 p-3 rounded-xl border flex-wrap ${r.id === state.selectedRequestId ? 'border-mgred bg-mgred/10' : 'border-black/10 bg-black/[0.02] hover:border-black/20'} cursor-pointer transition-all hover:-translate-y-0.5" data-action="select-request" data-id="${r.id}">
+    <div class="flex items-center gap-3 p-3 rounded-xl border flex-wrap ${r.id === state.selectedRequestId ? 'border-mgred bg-mgred/10 scale-[0.97]' : 'border-black/10 bg-black/[0.02] hover:border-black/20'} cursor-pointer transition-all hover:-translate-y-0.5" data-action="select-request" data-id="${r.id}">
       <span class="font-mono text-[12px] w-32 shrink-0">${esc(r.requestNumber)}</span>
-      <span class="font-mono text-[11px] text-soft w-24 shrink-0 truncate">${esc(r.vin)}</span>
-      <span class="text-[12px] text-soft flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')} · ${esc(r.submittedBy ? r.submittedBy.fullName : '')}</span>
+      <span class="font-mono text-[11px] font-bold w-24 shrink-0 truncate">${esc(r.vin)}</span>
+      <span class="text-[12px] font-bold flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')}</span>
+      ${submitterNote(r)}
       ${isReviewing ? statusChip(r.status) : ''}
-      ${r.branch ? `<span class="text-[9.5px] font-semibold uppercase tracking-wide text-ink/40 shrink-0 font-mono">${esc(r.branch.code)}</span>` : ''}
+      ${r.branch ? `<span class="text-[9.5px] font-bold uppercase tracking-wide text-ink/40 shrink-0 font-mono">${esc(r.branch.code)}</span>` : ''}
       <span class="text-[10px] font-bold uppercase tracking-wide ${r.origin === 'WALK_IN' ? 'text-amber-300' : 'text-ink/40'} shrink-0">${r.origin === 'WALK_IN' ? t('finance.origin_walkin') : ''}</span>
-      <span class="text-[12.5px] font-semibold tabular-nums shrink-0">${money(r.totalPrice)}</span>
+      <span class="text-[12.5px] font-bold tabular-nums shrink-0">${money(r.totalPrice)}</span>
     </div>
   `).join('') : `<div class="text-center text-soft text-[13px] py-g6">${t('finance.empty_queue')}</div>`;
 
@@ -890,6 +916,7 @@ function renderFinance() {
     : sel && listSource.some(r => r.id === sel.id)
       ? renderReadOnlyDetail(sel)
       : `<div class="glass glow-border rounded-xl2 p-g5"><div class="text-center text-soft text-[13px] py-g6">${t('finance.select_hint')}</div></div>`;
+  const detailCls = detailBoxClass(sel ? sel.id : null);
 
   return `
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-g5">
@@ -904,7 +931,7 @@ function renderFinance() {
         ${isReviewing ? `<button class="btn btn-ghost btn-sm mb-g3" data-action="stat-filter" data-key="pending">${t('common.back_to_queue')}</button>` : ''}
         <div class="space-y-2">${rows}</div>
       </div>
-      <div>${detail}</div>
+      <div class="${detailCls}">${detail}</div>
     </div>
   `;
 }
@@ -1003,6 +1030,7 @@ function renderActiveCasesTab(myEstimates, activeServices) {
   } else if (sel && myEstimates.some(r => r.id === sel.id)) {
     detailPanel = renderReadOnlyDetail(sel);
   }
+  const detailCls = detailBoxClass(sel ? sel.id : null);
 
   return `
     <div class="grid grid-cols-1 lg:grid-cols-[38.2%_1fr] gap-g5 lg-grid-2">
@@ -1010,7 +1038,7 @@ function renderActiveCasesTab(myEstimates, activeServices) {
         ${panelOpen(t('at.my_estimates'), t('at.my_estimates_sub', { n: myEstimates.length }))}
         ${listHtml}
       </div>
-      <div>${detailPanel}</div>
+      <div class="${detailCls}">${detailPanel}</div>
     </div>
   `;
 }
@@ -1018,12 +1046,14 @@ function renderActiveCasesTab(myEstimates, activeServices) {
 function renderEstimationTab() {
   const list = state.requests.filter(r => r.status === 'UNDER_AFTER_SALES_ESTIMATION');
   const rows = list.length ? list.map(r => `
-    <div class="flex items-center gap-3 p-3 rounded-xl border flex-wrap ${r.id === state.selectedRequestId ? 'border-mgred bg-mgred/10' : 'border-black/10 bg-black/[0.02] hover:border-black/20'} cursor-pointer transition-all hover:-translate-y-0.5" data-action="select-request" data-id="${r.id}">
-      <span class="font-mono text-[12.5px] font-semibold w-40 shrink-0 truncate">${esc(r.vin)}</span>
+    <div class="flex items-center gap-3 p-3 rounded-xl border flex-wrap ${r.id === state.selectedRequestId ? 'border-mgred bg-mgred/10 scale-[0.97]' : 'border-black/10 bg-black/[0.02] hover:border-black/20'} cursor-pointer transition-all hover:-translate-y-0.5" data-action="select-request" data-id="${r.id}">
+      <span class="font-mono text-[12.5px] font-bold w-40 shrink-0 truncate">${esc(r.vin)}</span>
       <span class="font-mono text-[11px] text-soft w-28 shrink-0 truncate">${esc(r.requestNumber)}</span>
-      <span class="text-[12px] text-soft flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')} · ${esc(r.submittedBy ? r.submittedBy.fullName : '')}</span>
-      ${r.branch ? `<span class="text-[9.5px] font-semibold uppercase tracking-wide text-ink/40 shrink-0 font-mono">${esc(r.branch.code)}</span>` : ''}
+      <span class="text-[12px] font-bold flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')}</span>
+      ${submitterNote(r)}
+      ${r.branch ? `<span class="text-[9.5px] font-bold uppercase tracking-wide text-ink/40 shrink-0 font-mono">${esc(r.branch.code)}</span>` : ''}
       ${originNote(r)}
+      <span class="text-[12px] font-bold tabular-nums shrink-0">${money(r.totalPrice)}</span>
       ${statusChip(r.status)}
     </div>
   `).join('') : `<div class="text-center text-soft text-[13px] py-g6">${t('at.no_estimation')}</div>`;
@@ -1071,7 +1101,8 @@ function renderEstimationTab() {
     `;
   }
 
-  return `<div class="grid grid-cols-1 lg:grid-cols-[38.2%_1fr] gap-g5 lg-grid-2"><div class="glass glow-border rounded-xl2 p-g5">${panelOpen(t('at.estimation_title'), t('at.estimation_sub'))}<div class="space-y-2">${rows}</div></div><div>${detail}</div></div>`;
+  const detailCls = detailBoxClass(r ? r.id : null);
+  return `<div class="grid grid-cols-1 lg:grid-cols-[38.2%_1fr] gap-g5 lg-grid-2"><div class="glass glow-border rounded-xl2 p-g5">${panelOpen(t('at.estimation_title'), t('at.estimation_sub'))}<div class="space-y-2">${rows}</div></div><div class="${detailCls}">${detail}</div></div>`;
 }
 
 function renderExecutionTab() {
@@ -1080,11 +1111,13 @@ function renderExecutionTab() {
   const rows = list.map(r => `
     <div class="p-g4 rounded-xl border border-black/10 bg-black/[0.02]">
       <div class="flex items-center gap-3 flex-wrap">
-        <span class="font-mono text-[12.5px] font-semibold w-40 shrink-0 truncate">${esc(r.vin)}</span>
+        <span class="font-mono text-[12.5px] font-bold w-40 shrink-0 truncate">${esc(r.vin)}</span>
         <span class="font-mono text-[11px] text-soft w-28 shrink-0 truncate">${esc(r.requestNumber)}</span>
-        <span class="text-[12px] text-soft flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')} · ${money(r.totalPrice)}</span>
-        ${r.branch ? `<span class="text-[9.5px] font-semibold uppercase tracking-wide text-ink/40 shrink-0 font-mono">${esc(r.branch.code)}</span>` : ''}
+        <span class="text-[12px] font-bold flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')}</span>
+        ${submitterNote(r)}
+        ${r.branch ? `<span class="text-[9.5px] font-bold uppercase tracking-wide text-ink/40 shrink-0 font-mono">${esc(r.branch.code)}</span>` : ''}
         ${originNote(r)}
+        <span class="text-[12px] font-bold tabular-nums shrink-0">${money(r.totalPrice)}</span>
         <span class="chip chip-approved">${t('at.ready')}</span>
       </div>
       <div class="flex gap-2 mt-g3 flex-wrap items-end">
