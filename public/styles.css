@@ -179,13 +179,15 @@ table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 560p
 .toast-success { background: #1e8e5a; }
 
 /* ---------- Motion --------------------------------------------------------
-   Small, tasteful entrance animation for freshly-rendered panels + rows.
-   Every render() call replaces #app's markup wholesale (no diffing), so
-   this turns each redraw into a soft settle instead of an abrupt snap. */
-@keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
-}
+   Entrance animation is now reserved for panels that genuinely appear once
+   (the login card, toasts) — not for anything reached by render()'s normal
+   redraws. An earlier version also faded in the main content area and
+   staggered list rows on every redraw, but since render() replaces #app's
+   markup wholesale on every state change (no diffing), that meant even a
+   plain tab click replayed a fade-from-transparent across the whole screen
+   — read by users as a "blink" rather than a transition. Removed in favor
+   of an instant, flicker-free redraw for that content (same reasoning as
+   the tab-pill indicator removal above). */
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -203,23 +205,7 @@ table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 560p
   to { opacity: 1; transform: scale(1); }
 }
 
-.animate-in { animation: fadeInUp .38s cubic-bezier(.2,.8,.3,1) both; }
 .animate-in-pop { animation: popIn .32s cubic-bezier(.2,.8,.3,1) both; }
-
-/* Staggered entrance for list rows / grid tiles: each direct child fades in
-   a beat after the last, up to 10 items (further items just share the same
-   final delay — still smooth, no long tail). */
-.stagger > * { animation: fadeInUp .34s cubic-bezier(.2,.8,.3,1) both; }
-.stagger > *:nth-child(1) { animation-delay: .02s; }
-.stagger > *:nth-child(2) { animation-delay: .05s; }
-.stagger > *:nth-child(3) { animation-delay: .08s; }
-.stagger > *:nth-child(4) { animation-delay: .11s; }
-.stagger > *:nth-child(5) { animation-delay: .14s; }
-.stagger > *:nth-child(6) { animation-delay: .17s; }
-.stagger > *:nth-child(7) { animation-delay: .20s; }
-.stagger > *:nth-child(8) { animation-delay: .23s; }
-.stagger > *:nth-child(9) { animation-delay: .26s; }
-.stagger > *:nth-child(n+10) { animation-delay: .28s; }
 
 @media (max-width: 1024px) {
   .lg-grid-2 { grid-template-columns: 1fr !important; }

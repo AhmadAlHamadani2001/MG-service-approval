@@ -9,7 +9,7 @@ function userSummary(id) {
   return u ? { id: u.id, fullName: u.fullName, role: u.role } : null;
 }
 
-router.get('/', requireAuth, requireRole('FINANCE', 'AFTERSALES_TEAM'), (req, res) => {
+router.get('/', requireAuth, requireRole('FINANCE', 'AFTERSALES_TEAM', 'AFTERSALES_HEAD'), (req, res) => {
   let entries = [...db.auditLog].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   if (req.query.entityType) entries = entries.filter(e => e.entityType === req.query.entityType);
   entries = entries.slice(0, 200).map(e => ({

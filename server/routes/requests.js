@@ -9,13 +9,12 @@ const {
 const router = express.Router();
 router.use(requireAuth);
 
-// Only the four workflow roles have any business here — Catalog
-// administrators manage services/accounts/branches/vehicles instead, and
-// Warranty Checker accounts are restricted to VIN warranty lookups only. An
-// explicit allowlist (rather than naming just the roles to exclude) means
-// any future role is denied by default unless someone deliberately adds it
-// here.
-const REQUEST_WORKFLOW_ROLES = ['SALES', 'SALES_MANAGER', 'FINANCE', 'AFTERSALES_TEAM'];
+// Only the workflow roles have any business here — Catalog administrators
+// manage services/accounts/branches/vehicles instead, and Warranty Checker
+// accounts are restricted to VIN warranty lookups only. An explicit
+// allowlist (rather than naming just the roles to exclude) means any future
+// role is denied by default unless someone deliberately adds it here.
+const REQUEST_WORKFLOW_ROLES = ['SALES', 'SALES_MANAGER', 'FINANCE', 'AFTERSALES_TEAM', 'AFTERSALES_HEAD'];
 router.use((req, res, next) => {
   if (!REQUEST_WORKFLOW_ROLES.includes(req.user.role)) {
     return next(new ApiError(403, 'This account does not have access to service requests.', 'ADMIN_NO_REQUEST_ACCESS'));
@@ -122,6 +121,11 @@ function canView(user, request) {
   if (user.role === 'SALES') return sameBranch(user, request);
   if (user.role === 'SALES_MANAGER') return true;
   if (user.role === 'FINANCE') return true;
+  // Head of Aftersales oversees the whole department across every branch —
+  // unlike AFTERSALES_TEAM below, its view isn't limited to walk-ins/
+  // aftersales-stage statuses, so it sees every request everywhere, the
+  // same full visibility Sales Manager and Finance already have.
+  if (user.role === 'AFTERSALES_HEAD') return true;
   if (user.role === 'AFTERSALES_TEAM') {
     return sameBranch(user, request) &&
       (request.origin === 'WALK_IN' ||
@@ -300,7 +304,7 @@ router.patch('/:id/resubmit', requireRole('SALES'), async (req, res, next) => {
 
 // ---- Aftersales Team: walk-in estimate (direct flow) --------------------
 
-router.post('/walk-in', requireRole('AFTERSALES_TEAM'), async (req, res, next) => {
+router.post('/walk-in', requireRole('AFTERSALES_TEAM', 'AFTERSALES_HEAD'), async (req, res, next) => {
   try {
     const { vin, vehicleModel, customerName, items, comment } = req.body || {};
     if (!vin || !vin.trim()) {
@@ -344,7 +348,7 @@ router.post('/walk-in', requireRole('AFTERSALES_TEAM'), async (req, res, next) =
   } catch (err) { next(err); }
 });
 
-router.patch('/:id/resubmit-estimate', requireRole('AFTERSALES_TEAM'), async (req, res, next) => {
+router.patch('/:id/resubmit-estimate', requireRole('AFTERSALES_TEAM', 'AFTERSALES_HEAD'), async (req, res, next) => {
   try {
     const request = findRequestOr404(req.params.id);
     assertSameBranch(req.user, request);
@@ -491,7 +495,7 @@ router.post('/:id/delegate', requireRole('FINANCE'), async (req, res, next) => {
 
 // ---- Aftersales Team: estimation, execution, closing ----------------------
 
-router.patch('/:id/estimation-items', requireRole('AFTERSALES_TEAM'), async (req, res, next) => {
+router.patch('/:id/estimation-items', requireRole('AFTERSALES_TEAM', 'AFTERSALES_HEAD'), async (req, res, next) => {
   try {
     const request = findRequestOr404(req.params.id);
     assertSameBranch(req.user, request);
@@ -537,7 +541,7 @@ router.patch('/:id/estimation-items', requireRole('AFTERSALES_TEAM'), async (req
   } catch (err) { next(err); }
 });
 
-router.post('/:id/resubmit-to-finance', requireRole('AFTERSALES_TEAM'), async (req, res, next) => {
+router.post('/:id/resubmit-to-finance', requireRole('AFTERSALES_TEAM', 'AFTERSALES_HEAD'), async (req, res, next) => {
   try {
     const request = findRequestOr404(req.params.id);
     assertSameBranch(req.user, request);
@@ -550,7 +554,7 @@ router.post('/:id/resubmit-to-finance', requireRole('AFTERSALES_TEAM'), async (r
   } catch (err) { next(err); }
 });
 
-router.post('/:id/start-execution', requireRole('AFTERSALES_TEAM'), async (req, res, next) => {
+router.post('/:id/start-execution', requireRole('AFTERSALES_TEAM', 'AFTERSALES_HEAD'), async (req, res, next) => {
   try {
     const request = findRequestOr404(req.params.id);
     assertSameBranch(req.user, request);
@@ -566,7 +570,7 @@ router.post('/:id/start-execution', requireRole('AFTERSALES_TEAM'), async (req, 
   } catch (err) { next(err); }
 });
 
-router.post('/:id/close', requireRole('AFTERSALES_TEAM'), async (req, res, next) => {
+router.post('/:id/close', requireRole('AFTERSALES_TEAM', 'AFTERSALES_HEAD'), async (req, res, next) => {
   try {
     const request = findRequestOr404(req.params.id);
     assertSameBranch(req.user, request);

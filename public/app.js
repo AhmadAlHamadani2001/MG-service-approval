@@ -374,7 +374,7 @@ function shellHtml(content) {
         </div>
       </div>
     </header>
-    <main class="max-w-7xl mx-auto px-g4 sm:px-g5 py-g5 animate-in">${content}</main>
+    <main class="max-w-7xl mx-auto px-g4 sm:px-g5 py-g5">${content}</main>
   `;
 }
 
@@ -589,7 +589,7 @@ function caseSectionsHtml(list, { needsActionFilter, needsActionLabel, activeTab
 
   const activeItems = tabs.find(tb => tb.key === effective).items;
   const body = activeItems.length
-    ? `<div class="space-y-2 stagger">${activeItems.map(r => caseRow(r, { leadWithVin, showOrigin, showSubmitter })).join('')}</div>`
+    ? `<div class="space-y-2">${activeItems.map(r => caseRow(r, { leadWithVin, showOrigin, showSubmitter })).join('')}</div>`
     : `<div class="text-center text-soft text-[12.5px] py-g5">${t('common.no_cases_in_tab')}</div>`;
 
   return tabBar + body;
@@ -664,7 +664,7 @@ function renderSalesNewRequestTab(catalogRows, pendingWithMe, detailPanel) {
       <div class="space-y-g5">
         <div class="glass glow-border rounded-xl2 p-g5">
           ${panelOpen(t('sales.pending_title'), t('sales.pending_sub'))}
-          <div class="space-y-2 stagger">${pendingRows}</div>
+          <div class="space-y-2">${pendingRows}</div>
         </div>
         ${detailPanel}
       </div>
@@ -772,7 +772,7 @@ function renderSalesManager() {
       : `<div class="glass glow-border rounded-xl2 p-g5"><div class="text-center text-soft text-[13px] py-g6">${t('finance.select_hint')}</div></div>`;
 
   return `
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-g5 stagger">
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-g5">
       ${statTile('pending', pending.length, t('sm.stat_pending'), filterKey)}
       ${statTile('with_finance', withFinance.length, t('sm.stat_with_finance'), filterKey)}
       ${statTile('returned', returned.length, t('finance.stat_returned'), filterKey)}
@@ -782,7 +782,7 @@ function renderSalesManager() {
       <div class="glass glow-border rounded-xl2 p-g5">
         ${panelOpen(isReviewing ? t('common.reviewing_cases') : t('sm.queue_title'), isReviewing ? '' : t('sm.queue_sub'))}
         ${isReviewing ? `<button class="btn btn-ghost btn-sm mb-g3" data-action="stat-filter" data-key="pending">${t('common.back_to_queue')}</button>` : ''}
-        <div class="space-y-2 stagger">${rows}</div>
+        <div class="space-y-2">${rows}</div>
       </div>
       <div>${detail}</div>
     </div>
@@ -887,7 +887,7 @@ function renderFinance() {
       : `<div class="glass glow-border rounded-xl2 p-g5"><div class="text-center text-soft text-[13px] py-g6">${t('finance.select_hint')}</div></div>`;
 
   return `
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-g5 stagger">
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-g5">
       ${statTile('pending', pending.length, t('finance.stat_pending'), filterKey)}
       ${statTile('estimation', estimation.length, t('finance.stat_estimation'), filterKey)}
       ${statTile('returned', returned.length, t('finance.stat_returned'), filterKey)}
@@ -897,7 +897,7 @@ function renderFinance() {
       <div class="glass glow-border rounded-xl2 p-g5">
         ${panelOpen(isReviewing ? t('common.reviewing_cases') : t('finance.queue_title'), isReviewing ? '' : t('finance.queue_sub'))}
         ${isReviewing ? `<button class="btn btn-ghost btn-sm mb-g3" data-action="stat-filter" data-key="pending">${t('common.back_to_queue')}</button>` : ''}
-        <div class="space-y-2 stagger">${rows}</div>
+        <div class="space-y-2">${rows}</div>
       </div>
       <div>${detail}</div>
     </div>
@@ -1016,6 +1016,7 @@ function renderEstimationTab() {
       <span class="font-mono text-[12.5px] font-semibold w-40 shrink-0 truncate">${esc(r.vin)}</span>
       <span class="font-mono text-[11px] text-soft w-28 shrink-0 truncate">${esc(r.requestNumber)}</span>
       <span class="text-[12px] text-soft flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')} · ${esc(r.submittedBy ? r.submittedBy.fullName : '')}</span>
+      ${r.branch ? `<span class="text-[9.5px] font-semibold uppercase tracking-wide text-ink/40 shrink-0 font-mono">${esc(r.branch.code)}</span>` : ''}
       ${originNote(r)}
       ${statusChip(r.status)}
     </div>
@@ -1064,7 +1065,7 @@ function renderEstimationTab() {
     `;
   }
 
-  return `<div class="grid grid-cols-1 lg:grid-cols-[38.2%_1fr] gap-g5 lg-grid-2"><div class="glass glow-border rounded-xl2 p-g5">${panelOpen(t('at.estimation_title'), t('at.estimation_sub'))}<div class="space-y-2 stagger">${rows}</div></div><div>${detail}</div></div>`;
+  return `<div class="grid grid-cols-1 lg:grid-cols-[38.2%_1fr] gap-g5 lg-grid-2"><div class="glass glow-border rounded-xl2 p-g5">${panelOpen(t('at.estimation_title'), t('at.estimation_sub'))}<div class="space-y-2">${rows}</div></div><div>${detail}</div></div>`;
 }
 
 function renderExecutionTab() {
@@ -1076,6 +1077,7 @@ function renderExecutionTab() {
         <span class="font-mono text-[12.5px] font-semibold w-40 shrink-0 truncate">${esc(r.vin)}</span>
         <span class="font-mono text-[11px] text-soft w-28 shrink-0 truncate">${esc(r.requestNumber)}</span>
         <span class="text-[12px] text-soft flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')} · ${money(r.totalPrice)}</span>
+        ${r.branch ? `<span class="text-[9.5px] font-semibold uppercase tracking-wide text-ink/40 shrink-0 font-mono">${esc(r.branch.code)}</span>` : ''}
         ${originNote(r)}
         <span class="chip chip-approved">${t('at.ready')}</span>
       </div>
@@ -1085,7 +1087,7 @@ function renderExecutionTab() {
       </div>
     </div>
   `).join('');
-  return `<div class="glass glow-border rounded-xl2 p-g5">${panelOpen(t('at.execution_title'), t('at.execution_sub'))}<div class="space-y-3 stagger">${rows}</div></div>`;
+  return `<div class="glass glow-border rounded-xl2 p-g5">${panelOpen(t('at.execution_title'), t('at.execution_sub'))}<div class="space-y-3">${rows}</div></div>`;
 }
 
 function renderResubmitEstimateForm(r, activeServices) {
@@ -1304,7 +1306,7 @@ function renderAdmin() {
 }
 
 function renderAdminAccounts() {
-  const roleOptions = ['SALES', 'SALES_MANAGER', 'FINANCE', 'AFTER_SALES_ADMIN', 'AFTERSALES_TEAM', 'WARRANTY_CHECK']
+  const roleOptions = ['SALES', 'SALES_MANAGER', 'FINANCE', 'AFTER_SALES_ADMIN', 'AFTERSALES_TEAM', 'AFTERSALES_HEAD', 'WARRANTY_CHECK']
     .map(r => `<option value="${r}">${t('role.' + r)}</option>`).join('');
   const branchOptions = state.branches.map(b => `<option value="${b.id}">${esc(b.code)} · ${esc(b.name)}</option>`).join('');
 
@@ -2118,6 +2120,7 @@ function render() {
     : role === 'SALES_MANAGER' ? renderSalesManager()
     : role === 'FINANCE' ? renderFinance()
     : role === 'AFTERSALES_TEAM' ? renderAftersalesTeam()
+    : role === 'AFTERSALES_HEAD' ? renderAftersalesTeam()
     : renderAdmin();
   app.innerHTML = shellHtml(content) + (state.changePasswordOpen ? changePasswordModalHtml() : '') + (state.resetPasswordUserId ? resetPasswordModalHtml() : '');
   wireTotals();

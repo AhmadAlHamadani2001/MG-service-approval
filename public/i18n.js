@@ -38,6 +38,7 @@ const STRINGS = {
     'role.FINANCE': 'Finance Approver',
     'role.AFTER_SALES_ADMIN': 'Aftersales Admin',
     'role.AFTERSALES_TEAM': 'Aftersales Team',
+    'role.AFTERSALES_HEAD': 'Head of Aftersales',
     'role.WARRANTY_CHECK': 'Warranty Checker',
 
     'status.PENDING_SALES_APPROVAL': 'Pending Sales Approval',
@@ -61,6 +62,7 @@ const STRINGS = {
     'topbar.workspace_FINANCE': 'Finance workspace',
     'topbar.workspace_AFTER_SALES_ADMIN': 'Administration',
     'topbar.workspace_AFTERSALES_TEAM': 'Aftersales workspace',
+    'topbar.workspace_AFTERSALES_HEAD': 'Aftersales workspace · All branches',
     'topbar.workspace_WARRANTY_CHECK': 'Warranty check',
 
     'sales.new_request_title': 'New Service Request',
@@ -362,6 +364,7 @@ const STRINGS = {
     'role.FINANCE': 'معتمد المالية',
     'role.AFTER_SALES_ADMIN': 'مدير كتالوج ما بعد البيع',
     'role.AFTERSALES_TEAM': 'فريق ما بعد البيع',
+    'role.AFTERSALES_HEAD': 'رئيس ما بعد البيع',
     'role.WARRANTY_CHECK': 'فاحص الضمان',
 
     'status.PENDING_SALES_APPROVAL': 'بانتظار موافقة المبيعات',
@@ -385,6 +388,7 @@ const STRINGS = {
     'topbar.workspace_FINANCE': 'مساحة المالية',
     'topbar.workspace_AFTER_SALES_ADMIN': 'الإدارة',
     'topbar.workspace_AFTERSALES_TEAM': 'مساحة ما بعد البيع',
+    'topbar.workspace_AFTERSALES_HEAD': 'مساحة ما بعد البيع · جميع الفروع',
     'topbar.workspace_WARRANTY_CHECK': 'فحص الضمان',
 
     'sales.new_request_title': 'طلب خدمة جديد',

@@ -15,13 +15,18 @@ router.use(requireRole('AFTER_SALES_ADMIN'));
 // approvals, no admin screens. See routes/requests.js and routes/users.js's
 // own admin-only gate above (already excludes it), and public/app.js's
 // role-based render() for the frontend side of the restriction.
-const ALL_ROLES = ['SALES', 'SALES_MANAGER', 'FINANCE', 'AFTER_SALES_ADMIN', 'AFTERSALES_TEAM', 'WARRANTY_CHECK'];
+// AFTERSALES_HEAD is the opposite of AFTERSALES_TEAM's branch restriction:
+// it has every action AFTERSALES_TEAM has (walk-ins, estimation, execution,
+// closing) but across every branch, not just one — see canView() and the
+// requireRole(...) lists in routes/requests.js.
+const ALL_ROLES = ['SALES', 'SALES_MANAGER', 'FINANCE', 'AFTER_SALES_ADMIN', 'AFTERSALES_TEAM', 'AFTERSALES_HEAD', 'WARRANTY_CHECK'];
 // Only Sales Representatives and Aftersales Team members belong to one
-// specific branch — Sales Manager, Finance, Aftersales Admin, and Warranty
-// Checker are central roles that operate across every branch (or, for
-// Warranty Checker, no branch at all since it never sees branch-scoped data).
+// specific branch — Sales Manager, Finance, Aftersales Admin, Aftersales
+// Head, and Warranty Checker are central roles that operate across every
+// branch (or, for Warranty Checker, no branch at all since it never sees
+// branch-scoped data).
 const BRANCH_ROLES = ['SALES', 'AFTERSALES_TEAM'];
-const CODE_PREFIX = { SALES: 'SLS', SALES_MANAGER: 'SLM', FINANCE: 'FIN', AFTER_SALES_ADMIN: 'ASA', AFTERSALES_TEAM: 'AST', WARRANTY_CHECK: 'WTC' };
+const CODE_PREFIX = { SALES: 'SLS', SALES_MANAGER: 'SLM', FINANCE: 'FIN', AFTER_SALES_ADMIN: 'ASA', AFTERSALES_TEAM: 'AST', AFTERSALES_HEAD: 'AFH', WARRANTY_CHECK: 'WTC' };
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function publicUser(u) {
