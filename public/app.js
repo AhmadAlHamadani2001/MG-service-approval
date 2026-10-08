@@ -28,6 +28,7 @@ const state = {
   bulkImportOpen: false,
   editingServiceId: null,
   walkinFormOpen: false,
+  reportOtherForId: null,
   reviewFilter: null,
   salesRequestsTab: null,
   atActiveSubtab: null,
@@ -519,22 +520,44 @@ function filterRowsBySearch(containerId, rowSelector, query) {
 // Aftersales Team took off during estimation) stay visible but greyed out
 // with a "Deleted" label instead of disappearing, so everyone reviewing the
 // request can see what changed.
-function renderItemRow(i) {
+//
+// opts.allowPricing (only passed true from the Sales Manager / Finance
+// detail views — see renderSalesManagerDetail/renderFinanceDetail) adds an
+// inline "set price" control for an "Others" item reported during execution
+// (unitPriceSnapshot === null, deliberately distinct from a real $0 price —
+// see hasUnpricedActiveItems() server-side). Everywhere else an unpriced
+// item just shows a "price pending" badge instead of a figure, with no way
+// to edit it — Sales reps and Aftersales aren't the ones who set a price.
+function renderItemRow(i, { allowPricing = false, requestId = null } = {}) {
   const removed = i.itemStatus === 'REMOVED';
+  const unpriced = i.unitPriceSnapshot === null;
+  const noteLine = i.notes ? `<div class="text-[11px] text-soft mt-0.5">${esc(i.notes)}</div>` : '';
   if (removed) {
     return `
       <div class="flex items-start justify-between gap-3 py-2.5 border-b border-black/10 last:border-0 opacity-40">
         <div class="flex-1 min-w-0">
           <div class="text-[13px] line-through">${esc(i.service.description)} <span class="text-soft text-[11.5px]">${esc(i.service.serviceCode)} × ${i.quantity}</span></div>
+          ${noteLine}
           <div class="text-[10.5px] font-semibold uppercase tracking-wide text-rose-500 mt-0.5">${t('common.deleted')}</div>
         </div>
         <span class="tabular-nums text-[13px] shrink-0 line-through">${money(i.lineTotal)}</span>
       </div>`;
   }
+  const priceCell = !unpriced
+    ? `<span class="tabular-nums">${money(i.lineTotal)}</span>`
+    : allowPricing
+      ? `<div class="flex items-center gap-1 shrink-0">
+          <input type="number" min="0.01" step="0.01" id="price-${i.id}" placeholder="${t('common.price_placeholder')}" class="w-20 rounded-lg border border-amber-400/50 bg-amber-400/5 text-center text-[12px] py-1">
+          <button class="btn btn-ghost btn-sm" data-action="set-item-price" data-id="${i.id}" data-req="${esc(requestId || '')}">${t('common.set_price')}</button>
+        </div>`
+      : `<span class="text-[11px] font-bold uppercase tracking-wide text-amber-600">${t('common.price_pending')}</span>`;
   return `
-    <div class="flex justify-between text-[12.5px] py-1.5 border-b border-black/10 last:border-0">
-      <span>${esc(i.service.description)} <span class="text-soft">${esc(i.service.serviceCode)} × ${i.quantity}</span>${i.source !== 'ORIGINAL' ? `<span class="ms-1.5 text-[9.5px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-400/15 text-amber-300">${esc(i.source.replace(/_/g, ' '))}</span>` : ''}</span>
-      <span class="tabular-nums">${money(i.lineTotal)}</span>
+    <div class="flex justify-between items-start gap-3 text-[12.5px] py-1.5 border-b border-black/10 last:border-0">
+      <div class="min-w-0">
+        <span>${esc(i.service.description)} <span class="text-soft">${esc(i.service.serviceCode)} × ${i.quantity}</span>${i.source !== 'ORIGINAL' ? `<span class="ms-1.5 text-[9.5px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-400/15 text-amber-300">${esc(i.source.replace(/_/g, ' '))}</span>` : ''}</span>
+        ${noteLine}
+      </div>
+      ${priceCell}
     </div>`;
 }
 
@@ -823,6 +846,7 @@ function renderSalesManagerDetail(r) {
   const isWalkIn = r.origin === 'WALK_IN';
   const activeCount = r.items.filter(i => i.itemStatus === 'ACTIVE').length;
   const finalApproval = r.approvalLevel === 'SALES_MANAGER';
+  const hasUnpriced = r.items.some(i => i.itemStatus === 'ACTIVE' && i.unitPriceSnapshot === null);
   return `
     <div class="glass glow-border rounded-xl2 p-g5">
       <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
@@ -831,11 +855,12 @@ function renderSalesManagerDetail(r) {
       </div>
       <div class="text-[12px] text-soft mb-g3">${t('finance.submitted_by')} ${esc(r.submittedBy ? r.submittedBy.fullName : '—')}${r.branch ? ' · ' + esc(r.branch.code) + ' ' + esc(r.branch.name) : ''} · ${activeCount} item(s)</div>
       <div class="text-[11px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-lg inline-block mb-g3 ${finalApproval ? 'bg-emerald-400/15 text-emerald-600' : 'bg-amber-400/15 text-amber-600'}">${finalApproval ? t('sm.final_approval') : t('sm.needs_finance')}</div>
-      ${r.items.map(renderItemRow).join('')}
+      ${r.items.map(i => renderItemRow(i, { allowPricing: true, requestId: r.id })).join('')}
       <div class="flex justify-between text-[13px] pt-2 font-semibold"><span>${t('common.total')} · ${hrs(r.totalLaborHours)}</span><span class="tabular-nums">${money(r.totalPrice)}</span></div>
+      ${hasUnpriced ? `<div class="text-[11.5px] text-amber-600 mt-2">${t('common.price_pending_notice')}</div>` : ''}
       <div class="mt-g3"><textarea id="sm-note" placeholder="${t('finance.note_label')}" class="field-input w-full min-h-[64px]"></textarea></div>
       <div class="flex flex-wrap gap-2 mt-g3">
-        <button class="btn btn-approve" data-action="sm-approve" data-id="${r.id}"><span class="material-symbols-outlined text-[16px]">check</span>${t('sales.approve')}</button>
+        <button class="btn btn-approve" data-action="sm-approve" data-id="${r.id}" ${hasUnpriced ? 'disabled title="' + esc(t('common.price_pending_notice')) + '"' : ''}><span class="material-symbols-outlined text-[16px]">check</span>${t('sales.approve')}</button>
         <button class="btn btn-warn" data-action="sm-return" data-id="${r.id}"><span class="material-symbols-outlined text-[16px]">assignment_return</span>${isWalkIn ? t('sales.return_aftersales') : t('sales.return_sales')}</button>
         <button class="btn btn-danger" data-action="sm-reject" data-id="${r.id}"><span class="material-symbols-outlined text-[16px]">close</span>${t('sales.reject')}</button>
       </div>
@@ -939,6 +964,7 @@ function renderFinance() {
 function renderFinanceDetail(r) {
   const isWalkIn = r.origin === 'WALK_IN';
   const activeCount = r.items.filter(i => i.itemStatus === 'ACTIVE').length;
+  const hasUnpriced = r.items.some(i => i.itemStatus === 'ACTIVE' && i.unitPriceSnapshot === null);
   return `
     <div class="glass glow-border rounded-xl2 p-g5">
       <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
@@ -946,11 +972,12 @@ function renderFinanceDetail(r) {
         <span class="text-[10.5px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full ${isWalkIn ? 'bg-amber-400/15 text-amber-300' : 'bg-black/[0.05] text-ink/60'}">${isWalkIn ? t('finance.origin_walkin') : t('finance.origin_sales')}</span>
       </div>
       <div class="text-[12px] text-soft mb-g3">${t('finance.submitted_by')} ${esc(r.submittedBy ? r.submittedBy.fullName : '—')}${r.branch ? ' · ' + esc(r.branch.code) + ' ' + esc(r.branch.name) : ''} · ${activeCount} item(s)</div>
-      ${r.items.map(renderItemRow).join('')}
+      ${r.items.map(i => renderItemRow(i, { allowPricing: true, requestId: r.id })).join('')}
       <div class="flex justify-between text-[13px] pt-2 font-semibold"><span>${t('common.total')} · ${hrs(r.totalLaborHours)}</span><span class="tabular-nums">${money(r.totalPrice)}</span></div>
+      ${hasUnpriced ? `<div class="text-[11.5px] text-amber-600 mt-2">${t('common.price_pending_notice')}</div>` : ''}
       <div class="mt-g3"><textarea id="finance-note" placeholder="${t('finance.note_label')}" class="field-input w-full min-h-[64px]"></textarea></div>
       <div class="flex flex-wrap gap-2 mt-g3">
-        <button class="btn btn-approve" data-action="finance-approve" data-id="${r.id}"><span class="material-symbols-outlined text-[16px]">check</span>${t('finance.approve')}</button>
+        <button class="btn btn-approve" data-action="finance-approve" data-id="${r.id}" ${hasUnpriced ? 'disabled title="' + esc(t('common.price_pending_notice')) + '"' : ''}><span class="material-symbols-outlined text-[16px]">check</span>${t('finance.approve')}</button>
         <button class="btn btn-ghost" data-action="finance-delegate" data-id="${r.id}" ${isWalkIn ? 'disabled title="' + esc(t('errors.ALREADY_AFTERSALES_ORIGIN')) + '"' : ''}><span class="material-symbols-outlined text-[16px]">call_split</span>${t('finance.delegate')}</button>
         <button class="btn btn-warn" data-action="finance-return" data-id="${r.id}"><span class="material-symbols-outlined text-[16px]">assignment_return</span>${t('finance.return')}</button>
         <button class="btn btn-danger" data-action="finance-reject" data-id="${r.id}"><span class="material-symbols-outlined text-[16px]">close</span>${t('finance.reject')}</button>
@@ -1043,6 +1070,33 @@ function renderActiveCasesTab(myEstimates, activeServices) {
   `;
 }
 
+// Shared "Report Additional Work" control (button + its toggleable
+// description/hours mini-form), reused everywhere Aftersales has a case
+// waiting on their action: the Estimation Queue, Approved/Execution Cases,
+// and a returned walk-in estimate awaiting correction. One `state.
+// reportOtherForId` flag (keyed by request id) tracks which single form is
+// open at a time, same pattern as state.walkinFormOpen etc. The submit
+// button posts to the same endpoint regardless of which tab it's opened
+// from — the server decides what happens next based on the request's
+// current status (see POST /:id/report-additional-work).
+function reportOtherButton(requestId) {
+  const formOpen = state.reportOtherForId === requestId;
+  return `<button class="btn btn-ghost btn-sm" data-action="${formOpen ? 'cancel-other-form' : 'open-other-form'}" data-id="${requestId}"><span class="material-symbols-outlined text-[16px]">add_circle</span>${t('at.report_other')}</button>`;
+}
+function reportOtherFormBlock(requestId) {
+  if (state.reportOtherForId !== requestId) return '';
+  return `
+    <div class="mt-g3 pt-g3 border-t border-dashed border-black/10 animate-in-pop">
+      <div class="text-[11.5px] text-soft mb-2">${t('at.report_other_sub')}</div>
+      <textarea id="other-desc-${requestId}" placeholder="${t('at.other_description_placeholder')}" class="field-input w-full min-h-[56px] mb-2"></textarea>
+      <div class="flex gap-2 flex-wrap items-end">
+        <div class="w-28"><label class="block text-[11px] text-soft mb-1">${t('at.other_hours_label')}</label><input type="number" id="other-hours-${requestId}" min="0.1" step="0.1" class="field-input"></div>
+        <button class="btn btn-primary btn-sm" data-action="submit-other-item" data-id="${requestId}">${t('at.submit_other')}<span class="material-symbols-outlined text-[16px]">arrow_forward</span></button>
+      </div>
+    </div>
+  `;
+}
+
 function renderEstimationTab() {
   const list = state.requests.filter(r => r.status === 'UNDER_AFTER_SALES_ESTIMATION');
   const rows = list.length ? list.map(r => `
@@ -1076,7 +1130,9 @@ function renderEstimationTab() {
             <button class="btn btn-danger btn-sm" data-action="remove-item" data-id="${i.id}" data-req="${r.id}">×</button>
           </div>
         </div>
-        <span class="tabular-nums text-[13px] shrink-0">${money(i.lineTotal)}</span>
+        ${i.unitPriceSnapshot === null
+          ? `<span class="text-[11px] font-bold uppercase tracking-wide text-amber-600 shrink-0">${t('common.price_pending')}</span>`
+          : `<span class="tabular-nums text-[13px] shrink-0">${money(i.lineTotal)}</span>`}
       </div>
     `;
     }).join('');
@@ -1093,7 +1149,9 @@ function renderEstimationTab() {
           <div class="flex-1 min-w-[160px]"><label class="block text-[11px] text-soft mb-1">${t('at.add_service')}</label><select id="add-service-select" class="field-input">${addOptions}</select></div>
           <div class="w-16"><label class="block text-[11px] text-soft mb-1">${t('common.qty')}</label><input type="number" id="add-service-qty" value="1" min="1" class="field-input"></div>
           <button class="btn btn-ghost btn-sm" data-action="add-item" data-req="${r.id}">+ ${t('common.select')}</button>
+          ${reportOtherButton(r.id)}
         </div>
+        ${reportOtherFormBlock(r.id)}
         <button class="btn btn-primary w-full mt-g3" data-action="aftersales-resubmit" data-id="${r.id}">${t('at.resubmit_finance')}<span class="material-symbols-outlined text-[16px]">arrow_forward</span></button>
         ${renderTimeline(r.history)}
         ${renderComments(r)}
@@ -1122,8 +1180,10 @@ function renderExecutionTab() {
       </div>
       <div class="flex gap-2 mt-g3 flex-wrap items-end">
         <input type="text" id="close-comment-${r.id}" placeholder="${t('at.closing_comment')}" class="field-input flex-1 min-w-[140px] !py-1.5">
+        ${reportOtherButton(r.id)}
         <button class="btn btn-approve btn-sm" data-action="close-request" data-id="${r.id}"><span class="material-symbols-outlined text-[16px]">check_circle</span>${t('at.close_request')}</button>
       </div>
+      ${reportOtherFormBlock(r.id)}
     </div>
   `).join('');
   return `<div class="glass glow-border rounded-xl2 p-g5">${panelOpen(t('at.execution_title'), t('at.execution_sub'))}<div class="space-y-3">${rows}</div></div>`;
@@ -1143,6 +1203,8 @@ function renderResubmitEstimateForm(r, activeServices) {
         <div><label class="block text-[11px] font-semibold uppercase tracking-wide text-soft mb-1.5">${t('sales.services')}</label><div class="flex flex-col gap-1.5 max-h-64 overflow-y-auto pe-1" id="re-catalog">${rows}</div></div>
       </div>
       <div class="flex justify-between items-center mt-g3 pt-g3 border-t border-dashed border-black/10" id="re-totals"></div>
+      <div class="mt-g3">${reportOtherButton(r.id)}</div>
+      ${reportOtherFormBlock(r.id)}
       <button class="btn btn-primary w-full mt-g4" data-action="submit-resubmit-estimate" data-id="${r.id}">${t('at.resubmit_sales')}<span class="material-symbols-outlined text-[16px]">arrow_forward</span></button>
     </div>
   `;
@@ -1231,8 +1293,15 @@ async function handleBulkImportFile(file) {
   }
 }
 
+// System-managed service used only by the Execution tab's "Report
+// Additional Work" action (see server/db.js's OTHER_SERVICE_CODE) — left out
+// of the Admin Catalog list entirely so there's no confusing "Reactivate"
+// button that would make it selectable in the normal new-request/add-service
+// catalog pickers, which have no way to collect a per-use price/hours.
+const OTHER_SERVICE_CODE = 'OTH-001';
+
 function renderAdminCatalog() {
-  const rows = state.services.map(s => {
+  const rows = state.services.filter(s => s.serviceCode !== OTHER_SERVICE_CODE).map(s => {
     if (state.editingServiceId === s.id) {
       return `
         <tr class="border-b border-black/8">
@@ -2551,6 +2620,41 @@ async function handleAction(action, el) {
         const commentEl = q(`#close-comment-${id}`);
         await api(`/api/requests/${id}/close`, { method: 'POST', body: JSON.stringify({ comment: commentEl?.value }) });
         toast(t('toast.request_closed'), 'success');
+        await refreshAll();
+        return;
+      }
+
+      case 'open-other-form': state.reportOtherForId = id; render(); return;
+      case 'cancel-other-form': state.reportOtherForId = null; render(); return;
+
+      case 'submit-other-item': {
+        const description = q(`#other-desc-${id}`)?.value.trim();
+        const laborHours = parseFloat(q(`#other-hours-${id}`)?.value);
+        if (!description) { toast(t('errors.DESCRIPTION_REQUIRED'), 'error'); return; }
+        if (!Number.isFinite(laborHours) || laborHours <= 0) { toast(t('errors.HOURS_REQUIRED'), 'error'); return; }
+        const result = await api(`/api/requests/${id}/report-additional-work`, {
+          method: 'POST',
+          body: JSON.stringify({ description, laborHours }),
+        });
+        // Only an already-APPROVED_IN_AFTER_SALES case restarts the approval
+        // chain (see the server route) — from the Estimation or
+        // RETURNED_TO_AFTERSALES tabs the item is just added to the draft,
+        // with status unchanged, so the existing Resubmit button still does
+        // the actual submitting.
+        const newStatus = result.request.status;
+        const restarted = newStatus === 'PENDING_SALES_APPROVAL' || newStatus === 'PENDING_FINANCE_APPROVAL';
+        toast(restarted ? submissionToast(newStatus) : t('toast.other_added'), 'success');
+        state.reportOtherForId = null;
+        await refreshAll();
+        return;
+      }
+
+      case 'set-item-price': {
+        const reqId = el.dataset.req;
+        const price = parseFloat(q(`#price-${id}`)?.value);
+        if (!Number.isFinite(price) || price <= 0) { toast(t('errors.PRICE_REQUIRED'), 'error'); return; }
+        await api(`/api/requests/${reqId}/items/${id}/price`, { method: 'PATCH', body: JSON.stringify({ price }) });
+        toast(t('toast.price_set'), 'success');
         await refreshAll();
         return;
       }
