@@ -551,13 +551,40 @@ function renderItemRow(i, { allowPricing = false, requestId = null } = {}) {
           <button class="btn btn-ghost btn-sm" data-action="set-item-price" data-id="${i.id}" data-req="${esc(requestId || '')}">${t('common.set_price')}</button>
         </div>`
       : `<span class="text-[11px] font-bold uppercase tracking-wide text-amber-600">${t('common.price_pending')}</span>`;
+  const approvedBadge = i.approvedBaseline ? `<span class="ms-1.5 text-[9.5px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-400/15 text-emerald-600">${t('common.approved_badge')}</span>` : '';
   return `
     <div class="flex justify-between items-start gap-3 text-[12.5px] py-1.5 border-b border-black/10 last:border-0">
       <div class="min-w-0">
-        <span>${esc(i.service.description)} <span class="text-soft">${esc(i.service.serviceCode)} × ${i.quantity}</span>${i.source !== 'ORIGINAL' ? `<span class="ms-1.5 text-[9.5px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-400/15 text-amber-300">${esc(i.source.replace(/_/g, ' '))}</span>` : ''}</span>
+        <span>${esc(i.service.description)} <span class="text-soft">${esc(i.service.serviceCode)} × ${i.quantity}</span>${i.source !== 'ORIGINAL' ? `<span class="ms-1.5 text-[9.5px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-400/15 text-amber-300">${esc(i.source.replace(/_/g, ' '))}</span>` : ''}${approvedBadge}</span>
         ${noteLine}
       </div>
       ${priceCell}
+    </div>`;
+}
+
+// When a request carries items from a previous full approval alongside a
+// newly added "Others" item (see approvedBaseline in serializeItem,
+// server/routes/requests.js), a single grand total reads as if everything
+// were new. This renders the breakdown instead — already-approved value,
+// the new additional-work amount, and the final total — falling back to the
+// plain single-total line for a normal request that was never reopened.
+function approvalTotalsBlock(r) {
+  const active = r.items.filter(i => i.itemStatus === 'ACTIVE');
+  const hasBaseline = active.some(i => i.approvedBaseline);
+  const hasNew = active.some(i => !i.approvedBaseline);
+  // Only worth breaking out once there's an actual mix — a request that was
+  // never reopened (nothing new) or one still fully unapproved (nothing
+  // baseline yet) reads better as the plain single total it always was.
+  if (!hasBaseline || !hasNew) {
+    return `<div class="flex justify-between text-[13px] pt-2 font-semibold"><span>${t('common.total')} · ${hrs(r.totalLaborHours)}</span><span class="tabular-nums">${money(r.totalPrice)}</span></div>`;
+  }
+  const approvedAmount = active.filter(i => i.approvedBaseline).reduce((s, i) => s + i.lineTotal, 0);
+  const additionalAmount = active.filter(i => !i.approvedBaseline).reduce((s, i) => s + (i.lineTotal || 0), 0);
+  return `
+    <div class="mt-2 pt-2 border-t border-dashed border-black/10 space-y-1">
+      <div class="flex justify-between text-[12.5px]"><span class="text-soft">${t('common.approved_amount_label')}</span><span class="tabular-nums">${money(approvedAmount)}</span></div>
+      <div class="flex justify-between text-[12.5px]"><span class="text-soft">${t('common.additional_work_amount_label')}</span><span class="tabular-nums">${money(additionalAmount)}</span></div>
+      <div class="flex justify-between text-[13px] font-semibold pt-1 border-t border-black/10"><span>${t('common.final_total_label')} · ${hrs(r.totalLaborHours)}</span><span class="tabular-nums">${money(r.totalPrice)}</span></div>
     </div>`;
 }
 
@@ -856,7 +883,7 @@ function renderSalesManagerDetail(r) {
       <div class="text-[12px] text-soft mb-g3">${t('finance.submitted_by')} ${esc(r.submittedBy ? r.submittedBy.fullName : '—')}${r.branch ? ' · ' + esc(r.branch.code) + ' ' + esc(r.branch.name) : ''} · ${activeCount} item(s)</div>
       <div class="text-[11px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-lg inline-block mb-g3 ${finalApproval ? 'bg-emerald-400/15 text-emerald-600' : 'bg-amber-400/15 text-amber-600'}">${finalApproval ? t('sm.final_approval') : t('sm.needs_finance')}</div>
       ${r.items.map(i => renderItemRow(i, { allowPricing: true, requestId: r.id })).join('')}
-      <div class="flex justify-between text-[13px] pt-2 font-semibold"><span>${t('common.total')} · ${hrs(r.totalLaborHours)}</span><span class="tabular-nums">${money(r.totalPrice)}</span></div>
+      ${approvalTotalsBlock(r)}
       ${hasUnpriced ? `<div class="text-[11.5px] text-amber-600 mt-2">${t('common.price_pending_notice')}</div>` : ''}
       <div class="mt-g3"><textarea id="sm-note" placeholder="${t('finance.note_label')}" class="field-input w-full min-h-[64px]"></textarea></div>
       <div class="flex flex-wrap gap-2 mt-g3">
@@ -973,7 +1000,7 @@ function renderFinanceDetail(r) {
       </div>
       <div class="text-[12px] text-soft mb-g3">${t('finance.submitted_by')} ${esc(r.submittedBy ? r.submittedBy.fullName : '—')}${r.branch ? ' · ' + esc(r.branch.code) + ' ' + esc(r.branch.name) : ''} · ${activeCount} item(s)</div>
       ${r.items.map(i => renderItemRow(i, { allowPricing: true, requestId: r.id })).join('')}
-      <div class="flex justify-between text-[13px] pt-2 font-semibold"><span>${t('common.total')} · ${hrs(r.totalLaborHours)}</span><span class="tabular-nums">${money(r.totalPrice)}</span></div>
+      ${approvalTotalsBlock(r)}
       ${hasUnpriced ? `<div class="text-[11.5px] text-amber-600 mt-2">${t('common.price_pending_notice')}</div>` : ''}
       <div class="mt-g3"><textarea id="finance-note" placeholder="${t('finance.note_label')}" class="field-input w-full min-h-[64px]"></textarea></div>
       <div class="flex flex-wrap gap-2 mt-g3">
@@ -1093,6 +1120,7 @@ function reportOtherFormBlock(requestId) {
         <div class="w-28"><label class="block text-[11px] text-soft mb-1">${t('at.other_hours_label')}</label><input type="number" id="other-hours-${requestId}" min="0.1" step="0.1" class="field-input"></div>
         <button class="btn btn-primary btn-sm" data-action="submit-other-item" data-id="${requestId}">${t('at.submit_other')}<span class="material-symbols-outlined text-[16px]">arrow_forward</span></button>
       </div>
+      <div class="text-[10.5px] text-soft mt-1.5">${t('at.other_hours_hint')}</div>
     </div>
   `;
 }
@@ -1165,28 +1193,47 @@ function renderEstimationTab() {
 
 function renderExecutionTab() {
   const list = state.requests.filter(r => r.status === 'APPROVED_IN_AFTER_SALES');
-  if (!list.length) return `<div class="glass glow-border rounded-xl2 p-g5"><div class="text-center text-soft text-[13px] py-g6">${t('at.no_execution')}</div></div>`;
-  const rows = list.map(r => `
-    <div class="p-g4 rounded-xl border border-black/10 bg-black/[0.02]">
-      <div class="flex items-center gap-3 flex-wrap">
-        <span class="font-mono text-[12.5px] font-bold w-40 shrink-0 truncate">${esc(r.vin)}</span>
-        <span class="font-mono text-[11px] text-soft w-28 shrink-0 truncate">${esc(r.requestNumber)}</span>
-        <span class="text-[12px] font-bold flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')}</span>
-        ${submitterNote(r)}
-        ${r.branch ? `<span class="text-[9.5px] font-bold uppercase tracking-wide text-ink/40 shrink-0 font-mono">${esc(r.branch.code)}</span>` : ''}
-        ${originNote(r)}
-        <span class="text-[12px] font-bold tabular-nums shrink-0">${money(r.totalPrice)}</span>
-        <span class="chip chip-approved">${t('at.ready')}</span>
-      </div>
-      <div class="flex gap-2 mt-g3 flex-wrap items-end">
+  const rows = list.length ? list.map(r => `
+    <div class="flex items-center gap-3 p-3 rounded-xl border flex-wrap ${r.id === state.selectedRequestId ? 'border-mgred bg-mgred/10 scale-[0.97]' : 'border-black/10 bg-black/[0.02] hover:border-black/20'} cursor-pointer transition-all hover:-translate-y-0.5" data-action="select-request" data-id="${r.id}">
+      <span class="font-mono text-[12.5px] font-bold w-40 shrink-0 truncate">${esc(r.vin)}</span>
+      <span class="font-mono text-[11px] text-soft w-28 shrink-0 truncate">${esc(r.requestNumber)}</span>
+      <span class="text-[12px] font-bold flex-1 min-w-0 truncate">${esc(r.vehicleModel || '')}</span>
+      ${submitterNote(r)}
+      ${r.branch ? `<span class="text-[9.5px] font-bold uppercase tracking-wide text-ink/40 shrink-0 font-mono">${esc(r.branch.code)}</span>` : ''}
+      ${originNote(r)}
+      <span class="text-[12px] font-bold tabular-nums shrink-0">${money(r.totalPrice)}</span>
+      <span class="chip chip-approved">${t('at.ready')}</span>
+    </div>
+  `).join('') : `<div class="text-center text-soft text-[13px] py-g6">${t('at.no_execution')}</div>`;
+
+  const r = state.selectedRequestDetail && state.selectedRequestDetail.status === 'APPROVED_IN_AFTER_SALES' ? state.selectedRequestDetail : null;
+  const detail = r ? renderExecutionDetail(r) : `<div class="glass glow-border rounded-xl2 p-g5"><div class="text-center text-soft text-[13px] py-g6">${t('finance.select_hint')}</div></div>`;
+  const detailCls = detailBoxClass(r ? r.id : null);
+
+  return `<div class="grid grid-cols-1 lg:grid-cols-[38.2%_1fr] gap-g5 lg-grid-2"><div class="glass glow-border rounded-xl2 p-g5">${panelOpen(t('at.execution_title'), t('at.execution_sub'))}<div class="space-y-2">${rows}</div></div><div class="${detailCls}">${detail}</div></div>`;
+}
+
+// Detail panel for a selected Execution-tab case: the same read-only
+// breakdown every other detail view shows (items, totals, timeline,
+// comments), plus the two actions only available at this stage — reporting
+// work found while actually doing the job, and closing it out once done.
+function renderExecutionDetail(r) {
+  return `
+    <div class="glass glow-border rounded-xl2 p-g5">
+      <div class="flex items-center justify-between mb-1"><span class="font-display font-semibold text-[15px]">${esc(r.requestNumber)}</span>${statusChip(r.status)}</div>
+      <div class="text-[12px] text-soft mb-g3">${esc(r.vin)} ${r.vehicleModel ? '· ' + esc(r.vehicleModel) : ''}</div>
+      ${r.items.map(renderItemRow).join('')}
+      ${approvalTotalsBlock(r)}
+      <div class="flex gap-2 mt-g3 flex-wrap items-end pt-g3 border-t border-dashed border-black/10">
         <input type="text" id="close-comment-${r.id}" placeholder="${t('at.closing_comment')}" class="field-input flex-1 min-w-[140px] !py-1.5">
         ${reportOtherButton(r.id)}
         <button class="btn btn-approve btn-sm" data-action="close-request" data-id="${r.id}"><span class="material-symbols-outlined text-[16px]">check_circle</span>${t('at.close_request')}</button>
       </div>
       ${reportOtherFormBlock(r.id)}
+      ${renderTimeline(r.history)}
+      ${renderComments(r)}
     </div>
-  `).join('');
-  return `<div class="glass glow-border rounded-xl2 p-g5">${panelOpen(t('at.execution_title'), t('at.execution_sub'))}<div class="space-y-3">${rows}</div></div>`;
+  `;
 }
 
 function renderResubmitEstimateForm(r, activeServices) {
