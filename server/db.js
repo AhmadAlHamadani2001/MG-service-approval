@@ -30,6 +30,20 @@ const USE_POSTGRES = !!DATABASE_URL;
 const STATE_ROW_ID = 'main';
 const STATE_TABLE = 'mg_approval_state';
 
+// A dedicated, system-managed catalog service representing work that wasn't
+// on the original quote — e.g. the Aftersales Team finds a cracked windshield
+// mid-job. It's deliberately isActive:false (and excluded from the Admin
+// Catalog listing — see renderAdminCatalog() in app.js) so it never shows up
+// in a normal "pick a service + quantity" catalog checklist, which has no
+// way to collect a per-use description/price/hours. The only way to use it
+// is the dedicated "Report Additional Work" action during execution (see
+// POST /:id/execution-extra-item in routes/requests.js), which looks it up
+// by this code and fills in the description/hours per request itself.
+// approvalLevel is hardcoded FINANCE so computeApprovalLevel() always routes
+// a request carrying one of these items through both Sales Manager AND
+// Finance, regardless of what else is on the request.
+const OTHER_SERVICE_CODE = 'OTH-001';
+
 let pgPool = null;
 if (USE_POSTGRES) {
   // Lazily required so `pg` is only needed when it's actually configured —
@@ -108,6 +122,10 @@ function buildSeed() {
     svc('SVC-0077', 'Tyre Set (4) + Alignment', 'Mechanical', 2.0, 740, 'FINANCE'),
     svc('SVC-0410', 'Timing Belt Kit', 'Mechanical', 5.0, 580, 'FINANCE'),
     svc('SVC-0512', 'AC Compressor Replacement', 'Electrical', 3.0, 690, 'FINANCE'),
+    // System-managed "Others" entry — see OTHER_SERVICE_CODE above. Kept
+    // inactive and price/hours at 0 here; every real use overrides both
+    // per request via the execution-extra-item endpoint.
+    { ...svc(OTHER_SERVICE_CODE, 'Others (additional work found during execution)', 'Other', 0, 0, 'FINANCE'), isActive: false },
   ];
   const byCode = Object.fromEntries(services.map(s => [s.serviceCode, s]));
 
@@ -313,6 +331,32 @@ const db = {};
 // accounts" or other confusing bugs with no error), detect that mismatch
 // and rebuild fresh seed data automatically. Returns true if it rewrote db.
 const EXPECTED_ROLES = ['SALES', 'SALES_MANAGER', 'FINANCE', 'AFTER_SALES_ADMIN', 'AFTERSALES_TEAM'];
+
+// Idempotent backfill for an already-running deployment's saved data, which
+// won't pick up a new buildSeed() entry on its own (buildSeed() only runs
+// for a brand-new database). Safe to call on every boot — a no-op once the
+// row exists, same pattern as vehiclesStore.js's ALTER TABLE ADD COLUMN IF
+// NOT EXISTS. Returns true if it added the row (so the caller persists).
+function ensureOtherService() {
+  if (!Array.isArray(db.services) || db.services.some(s => s.serviceCode === OTHER_SERVICE_CODE)) return false;
+  const now = new Date().toISOString();
+  const admin = (db.users || []).find(u => u.role === 'AFTER_SALES_ADMIN');
+  db.services.push({
+    id: uuidv4(),
+    serviceCode: OTHER_SERVICE_CODE,
+    description: 'Others (additional work found during execution)',
+    category: 'Other',
+    laborHours: 0,
+    price: 0,
+    approvalLevel: 'FINANCE',
+    isActive: false,
+    createdBy: admin ? admin.id : null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return true;
+}
+
 function reconcileShape() {
   const hasAllExpectedRoles = Array.isArray(db.users) &&
     EXPECTED_ROLES.every(role => db.users.some(u => u.role === role));
@@ -337,12 +381,14 @@ function reconcileShape() {
     Object.assign(db, fresh);
     return true;
   }
+  let rewrote = false;
   if (!Array.isArray(db.comments)) {
     // Migration shim: older saved state (pre-Aftersales-Team split) won't have a comments array.
     db.comments = [];
-    return true;
+    rewrote = true;
   }
-  return false;
+  if (ensureOtherService()) rewrote = true;
+  return rewrote;
 }
 
 async function ensureTable() {
@@ -444,4 +490,4 @@ async function resetToSeed() {
   return { seedVehicles: null };
 }
 
-module.exports = { db, init, persist, uuid: uuidv4, nextRequestNumber, resetToSeed, DATA_FILE, USE_POSTGRES, pgPool };
+module.exports = { db, init, persist, uuid: uuidv4, nextRequestNumber, resetToSeed, DATA_FILE, USE_POSTGRES, pgPool, OTHER_SERVICE_CODE };
