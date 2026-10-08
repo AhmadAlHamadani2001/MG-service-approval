@@ -1,9 +1,9 @@
 const express = require('express');
-const { db, uuid, persist, nextRequestNumber, OTHER_SERVICE_CODE } = require('../db');
+const { db, uuid, persist, nextRequestNumber, OTHER_SERVICE_CODE, OTHER_HOURLY_RATE } = require('../db');
 const { requireAuth, requireRole } = require('../auth');
 const {
   ApiError, findRequestOr404, assertStatus, recordHistory, logAudit,
-  recomputeTotals, transition,
+  recomputeTotals, transition, round2,
 } = require('../stateMachine');
 
 const router = express.Router();
@@ -48,8 +48,28 @@ function serializeItem(item) {
     source: item.source,
     itemStatus: item.itemStatus,
     notes: item.notes,
+    // True once this item was part of a request that reached full approval
+    // (see markItemsApproved() below) — lets the UI show "already approved"
+    // on items from before a request was reopened for additional work, vs.
+    // the new item(s) that are the actual subject of the current review.
+    approvedBaseline: !!item.approvedBaseline,
     service: serviceSummary(item.serviceId),
   };
+}
+
+// Stamps every currently-ACTIVE item as "approved" the moment a request
+// reaches full approval (APPROVED_IN_AFTER_SALES) — called from both the
+// Sales Manager path (when their approval alone is final) and the Finance
+// approve endpoint below. If the request is later reopened via
+// report-additional-work, only the newly added item lacks this flag, so the
+// next approval screen can clearly separate "already approved" value from
+// the new additional-work amount (see serializeItem above and the frontend's
+// approvalTotalsBlock()). A later full approval re-stamps everything active
+// at that point, so a second round of additional work starts the same way.
+function markItemsApproved(request) {
+  db.requestItems
+    .filter(i => i.requestId === request.id && i.itemStatus === 'ACTIVE')
+    .forEach(i => { i.approvedBaseline = true; });
 }
 
 function serializeComment(c) {
@@ -65,12 +85,15 @@ function computeApprovalLevel(request) {
   return needsFinance ? 'FINANCE' : 'SALES_MANAGER';
 }
 
-// An "Others" item (see OTHER_SERVICE_CODE in db.js) is created with its
-// price unset (unitPriceSnapshot: null, not 0 — zero is a legitimate price,
-// null means "not priced yet") because Aftersales reports only a
-// description and hours, not a cost. Sales Manager/Finance can't
-// meaningfully approve a request whose cost they can't see, so both
-// approval actions below refuse until every active item has a real price.
+// An "Others" item (see OTHER_SERVICE_CODE in db.js) is priced
+// automatically from the hours Aftersales reports (laborHours *
+// OTHER_HOURLY_RATE, see POST /:id/report-additional-work below) — Aftersales
+// never sets or sees a price. This guard is now effectively a safety net: it
+// still refuses approval if an item's price is unset (unitPriceSnapshot ===
+// null, not 0 — zero is a legitimate price), which can only happen for an
+// "Others" item added before this auto-pricing existed. The old manual
+// price-set endpoint (PATCH /:id/items/:itemId/price, below) is kept so a
+// Sales Manager/Finance user can still clear one of those legacy items.
 function hasUnpricedActiveItems(request) {
   return db.requestItems.some(i => i.requestId === request.id && i.itemStatus === 'ACTIVE' && i.unitPriceSnapshot === null);
 }
@@ -405,6 +428,7 @@ router.post('/:id/sales-manager-approve', requireRole('SALES_MANAGER'), async (r
     }
     const level = computeApprovalLevel(request);
     const to = level === 'SALES_MANAGER' ? 'APPROVED_IN_AFTER_SALES' : 'PENDING_FINANCE_APPROVAL';
+    if (to === 'APPROVED_IN_AFTER_SALES') markItemsApproved(request);
     await transition(request, {
       to, actor: req.user, action: 'SALES_MANAGER_APPROVE', comment: req.body?.comment,
       extra: { salesManagerApproverId: req.user.id },
@@ -456,6 +480,7 @@ router.post('/:id/approve', requireRole('FINANCE'), async (req, res, next) => {
     if (hasUnpricedActiveItems(request)) {
       throw new ApiError(409, 'Set a price for the pending "Others" item(s) before approving.', 'PRICE_NOT_SET');
     }
+    markItemsApproved(request);
     await transition(request, {
       to: 'APPROVED_IN_AFTER_SALES', actor: req.user, action: 'FINANCE_APPROVE', comment: req.body?.comment,
       extra: { financeReviewerId: req.user.id },
@@ -623,7 +648,8 @@ router.post('/:id/report-additional-work', requireRole('AFTERSALES_TEAM', 'AFTER
     const now = new Date().toISOString();
     db.requestItems.push({
       id: uuid(), requestId: request.id, serviceId: otherService.id, quantity: 1,
-      unitPriceSnapshot: null, laborHoursSnapshot: laborHours,
+      // Priced automatically — Aftersales enters hours, never a price.
+      unitPriceSnapshot: round2(laborHours * OTHER_HOURLY_RATE), laborHoursSnapshot: laborHours,
       source: 'OTHER_REPORTED', itemStatus: 'ACTIVE', addedBy: req.user.id,
       notes: description, createdAt: now, updatedAt: now,
     });
