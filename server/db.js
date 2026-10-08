@@ -44,6 +44,13 @@ const STATE_TABLE = 'mg_approval_state';
 // Finance, regardless of what else is on the request.
 const OTHER_SERVICE_CODE = 'OTH-001';
 
+// Flat labor rate (Saudi Riyal per hour) used to price an "Others" item
+// automatically from the hours Aftersales reports — see
+// POST /:id/report-additional-work in routes/requests.js. Aftersales never
+// enters or sees a price for these; the system computes it so Sales
+// Manager/Finance always see a real cost to approve against.
+const OTHER_HOURLY_RATE = 150;
+
 let pgPool = null;
 if (USE_POSTGRES) {
   // Lazily required so `pg` is only needed when it's actually configured —
@@ -357,6 +364,30 @@ function ensureOtherService() {
   return true;
 }
 
+// Idempotent backfill for the "already approved" item marker (see
+// markItemsApproved() in routes/requests.js) — any request that reached
+// APPROVED_IN_AFTER_SALES or CLOSED before this feature existed (demo seed
+// data, or real requests approved by an older deployment) has no
+// approvedBaseline flag on its items at all, which would make the approval
+// totals breakdown wrongly show every item on a reopened case as "new"
+// additional work instead of recognizing the previously-approved ones. Safe
+// to call on every boot — a no-op once every such request's items are
+// already flagged. Returns true if it changed anything.
+function ensureApprovedItemsBaseline() {
+  if (!Array.isArray(db.requests) || !Array.isArray(db.requestItems)) return false;
+  let changed = false;
+  const approvedRequestIds = new Set(
+    db.requests.filter(r => r.status === 'APPROVED_IN_AFTER_SALES' || r.status === 'CLOSED').map(r => r.id)
+  );
+  db.requestItems.forEach(i => {
+    if (i.itemStatus === 'ACTIVE' && approvedRequestIds.has(i.requestId) && !i.approvedBaseline) {
+      i.approvedBaseline = true;
+      changed = true;
+    }
+  });
+  return changed;
+}
+
 function reconcileShape() {
   const hasAllExpectedRoles = Array.isArray(db.users) &&
     EXPECTED_ROLES.every(role => db.users.some(u => u.role === role));
@@ -388,6 +419,7 @@ function reconcileShape() {
     rewrote = true;
   }
   if (ensureOtherService()) rewrote = true;
+  if (ensureApprovedItemsBaseline()) rewrote = true;
   return rewrote;
 }
 
@@ -490,4 +522,4 @@ async function resetToSeed() {
   return { seedVehicles: null };
 }
 
-module.exports = { db, init, persist, uuid: uuidv4, nextRequestNumber, resetToSeed, DATA_FILE, USE_POSTGRES, pgPool, OTHER_SERVICE_CODE };
+module.exports = { db, init, persist, uuid: uuidv4, nextRequestNumber, resetToSeed, DATA_FILE, USE_POSTGRES, pgPool, OTHER_SERVICE_CODE, OTHER_HOURLY_RATE };
