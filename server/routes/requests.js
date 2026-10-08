@@ -1,5 +1,5 @@
 const express = require('express');
-const { db, uuid, persist, nextRequestNumber } = require('../db');
+const { db, uuid, persist, nextRequestNumber, OTHER_SERVICE_CODE } = require('../db');
 const { requireAuth, requireRole } = require('../auth');
 const {
   ApiError, findRequestOr404, assertStatus, recordHistory, logAudit,
@@ -63,6 +63,16 @@ function computeApprovalLevel(request) {
     return !service || service.approvalLevel !== 'SALES_MANAGER';
   });
   return needsFinance ? 'FINANCE' : 'SALES_MANAGER';
+}
+
+// An "Others" item (see OTHER_SERVICE_CODE in db.js) is created with its
+// price unset (unitPriceSnapshot: null, not 0 — zero is a legitimate price,
+// null means "not priced yet") because Aftersales reports only a
+// description and hours, not a cost. Sales Manager/Finance can't
+// meaningfully approve a request whose cost they can't see, so both
+// approval actions below refuse until every active item has a real price.
+function hasUnpricedActiveItems(request) {
+  return db.requestItems.some(i => i.requestId === request.id && i.itemStatus === 'ACTIVE' && i.unitPriceSnapshot === null);
 }
 
 function serializeRequest(request, { withDetail = false } = {}) {
@@ -390,6 +400,9 @@ router.post('/:id/sales-manager-approve', requireRole('SALES_MANAGER'), async (r
   try {
     const request = findRequestOr404(req.params.id);
     assertStatus(request, 'PENDING_SALES_APPROVAL', 'approve this request');
+    if (hasUnpricedActiveItems(request)) {
+      throw new ApiError(409, 'Set a price for the pending "Others" item(s) before approving.', 'PRICE_NOT_SET');
+    }
     const level = computeApprovalLevel(request);
     const to = level === 'SALES_MANAGER' ? 'APPROVED_IN_AFTER_SALES' : 'PENDING_FINANCE_APPROVAL';
     await transition(request, {
@@ -440,6 +453,9 @@ router.post('/:id/approve', requireRole('FINANCE'), async (req, res, next) => {
   try {
     const request = findRequestOr404(req.params.id);
     assertStatus(request, 'PENDING_FINANCE_APPROVAL', 'approve this request');
+    if (hasUnpricedActiveItems(request)) {
+      throw new ApiError(409, 'Set a price for the pending "Others" item(s) before approving.', 'PRICE_NOT_SET');
+    }
     await transition(request, {
       to: 'APPROVED_IN_AFTER_SALES', actor: req.user, action: 'FINANCE_APPROVE', comment: req.body?.comment,
       extra: { financeReviewerId: req.user.id },
@@ -565,6 +581,96 @@ router.post('/:id/start-execution', requireRole('AFTERSALES_TEAM', 'AFTERSALES_H
     request.updatedAt = new Date().toISOString();
     recordHistory(request, { from: request.status, to: request.status, actor: req.user, action: 'START_EXECUTION' });
     logAudit({ entityType: 'REQUEST', entityId: request.id, action: 'START_EXECUTION', actor: req.user });
+    await persist();
+    res.json({ request: serializeRequest(request, { withDetail: true }) });
+  } catch (err) { next(err); }
+});
+
+// Aftersales finds work mid-case that wasn't on the original quote (a
+// cracked windshield, say) — they describe it and estimate the hours. This
+// is open to any status where Aftersales currently has a case waiting on
+// their own action: estimating it, correcting a returned walk-in estimate,
+// or executing an already-approved job. What happens next depends on where
+// the request already was:
+//   - APPROVED_IN_AFTER_SALES: the request was fully approved once already,
+//     so adding unapproved work re-opens it — it goes back through the
+//     normal chain from the top (Sales Manager, then Finance, since the
+//     "Others" catalog entry is hardcoded FINANCE-level — see
+//     OTHER_SERVICE_CODE in db.js) before it's approved again and returns
+//     to the Execution queue.
+//   - UNDER_AFTER_SALES_ESTIMATION / RETURNED_TO_AFTERSALES: nothing has
+//     been approved yet (or is being corrected) — the item is just added to
+//     the draft like any other estimation line, with no status change.
+//     Aftersales keeps working the estimate and sends it on with the
+//     existing Resubmit button whenever they're ready, same as always.
+const AFTERSALES_OTHER_STATUSES = ['UNDER_AFTER_SALES_ESTIMATION', 'APPROVED_IN_AFTER_SALES', 'RETURNED_TO_AFTERSALES'];
+router.post('/:id/report-additional-work', requireRole('AFTERSALES_TEAM', 'AFTERSALES_HEAD'), async (req, res, next) => {
+  try {
+    const request = findRequestOr404(req.params.id);
+    assertSameBranch(req.user, request);
+    assertStatus(request, AFTERSALES_OTHER_STATUSES, 'report additional work on this request');
+
+    const description = (req.body?.description || '').trim();
+    const laborHours = Number(req.body?.laborHours);
+    if (!description) throw new ApiError(400, 'A description of the additional work is required.', 'DESCRIPTION_REQUIRED');
+    if (!Number.isFinite(laborHours) || laborHours <= 0) {
+      throw new ApiError(400, 'Estimated hours must be a number greater than zero.', 'HOURS_REQUIRED');
+    }
+
+    const otherService = db.services.find(s => s.serviceCode === OTHER_SERVICE_CODE);
+    if (!otherService) throw new ApiError(500, 'The "Others" catalog service is missing.', 'OTHER_SERVICE_MISSING');
+
+    const now = new Date().toISOString();
+    db.requestItems.push({
+      id: uuid(), requestId: request.id, serviceId: otherService.id, quantity: 1,
+      unitPriceSnapshot: null, laborHoursSnapshot: laborHours,
+      source: 'OTHER_REPORTED', itemStatus: 'ACTIVE', addedBy: req.user.id,
+      notes: description, createdAt: now, updatedAt: now,
+    });
+    recomputeTotals(request);
+    request.afterSalesReviewerId = req.user.id;
+    const comment = (req.body?.comment || '').trim() || null;
+    if (comment) pushComment(request, req.user, comment);
+
+    if (request.status === 'APPROVED_IN_AFTER_SALES') {
+      await transition(request, {
+        to: 'PENDING_SALES_APPROVAL', actor: req.user, action: 'REPORT_ADDITIONAL_WORK', comment: description,
+      });
+    } else {
+      request.updatedAt = new Date().toISOString();
+      logAudit({ entityType: 'REQUEST', entityId: request.id, action: 'REPORT_ADDITIONAL_WORK', actor: req.user, diff: { description, laborHours } });
+      await persist();
+    }
+    res.json({ request: serializeRequest(request, { withDetail: true }) });
+  } catch (err) { next(err); }
+});
+
+// Lets whichever approver currently holds the request (Sales Manager while
+// PENDING_SALES_APPROVAL, Finance while PENDING_FINANCE_APPROVAL) put a real
+// price on an "Others" item before approving it — see
+// hasUnpricedActiveItems() above, which blocks approval until this happens.
+// Either role may also revise a price the other one already set, while the
+// request is at their stage.
+router.patch('/:id/items/:itemId/price', requireRole('SALES_MANAGER', 'FINANCE'), async (req, res, next) => {
+  try {
+    const request = findRequestOr404(req.params.id);
+    const atRightStage =
+      (req.user.role === 'SALES_MANAGER' && request.status === 'PENDING_SALES_APPROVAL') ||
+      (req.user.role === 'FINANCE' && request.status === 'PENDING_FINANCE_APPROVAL');
+    if (!atRightStage) {
+      throw new ApiError(409, `Cannot set a price: request is "${request.status}".`, 'WRONG_STAGE');
+    }
+    const item = db.requestItems.find(i => i.id === req.params.itemId && i.requestId === request.id && i.itemStatus === 'ACTIVE');
+    if (!item) throw new ApiError(404, 'Active item not found.', 'ITEM_NOT_FOUND');
+
+    const price = Number(req.body?.price);
+    if (!Number.isFinite(price) || price <= 0) throw new ApiError(400, 'Price must be a number greater than zero.', 'PRICE_REQUIRED');
+
+    item.unitPriceSnapshot = price;
+    item.updatedAt = new Date().toISOString();
+    recomputeTotals(request);
+    request.updatedAt = new Date().toISOString();
+    logAudit({ entityType: 'REQUEST', entityId: request.id, action: 'ITEM_PRICE_SET', actor: req.user, diff: { itemId: item.id, price } });
     await persist();
     res.json({ request: serializeRequest(request, { withDetail: true }) });
   } catch (err) { next(err); }
